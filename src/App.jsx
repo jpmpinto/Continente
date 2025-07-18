@@ -1,6 +1,30 @@
 import React, { useState, useEffect } from 'react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
-// Função para listar chaves YYYY-MM no localStorage
+function downloadCSV(data, filename) {
+  if (!data.length) return;
+
+  const headers = Object.keys(data[0]);
+  const csvRows = [
+    headers.join(','),
+    ...data.map(row => headers.map(field => {
+      const escaped = ('' + row[field]).replace(/"/g, '""');
+      return `"${escaped}"`;
+    }).join(','))
+  ];
+
+  const csvString = csvRows.join('\n');
+  const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
 function getMonthKeys() {
   return Object.keys(localStorage).filter(key => /^\d{4}-\d{2}$/.test(key));
 }
@@ -12,8 +36,8 @@ function App() {
   const [monthKeys, setMonthKeys] = useState([]);
   const [selectedMonth, setSelectedMonth] = useState('');
   const [stats, setStats] = useState([]);
+  const [monthlyTotals, setMonthlyTotals] = useState([]);
 
-  // Atualiza quantidade num mês selecionado
   const updateQuantidade = (idx, value) => {
     setQuantidades(prev => ({
       ...prev,
@@ -21,7 +45,6 @@ function App() {
     }));
   };
 
-  // Carregar meses guardados e dados do mês atual ao montar
   useEffect(() => {
     const keys = getMonthKeys();
     setMonthKeys(keys);
@@ -41,7 +64,6 @@ function App() {
     }
   }, []);
 
-  // Guardar artigos e quantidades no localStorage sempre que mudam (apenas no mês atual)
   useEffect(() => {
     if (artigos.length === 0) return;
     const currentMonth = new Date().toISOString().slice(0, 7);
@@ -54,7 +76,6 @@ function App() {
     }
   }, [artigos, quantidades, selectedMonth]);
 
-  // Carregar dados do mês selecionado ao mudar de mês
   useEffect(() => {
     if (!selectedMonth) return;
     const saved = localStorage.getItem(selectedMonth);
@@ -72,20 +93,19 @@ function App() {
     }
   }, [selectedMonth]);
 
-  // Calcular total do mês selecionado
-  const totalMes = artigos.reduce((acc, item, idx) => {
-    const qtd = quantidades[idx] || 1;
-    return acc + item.preco * qtd;
-  }, 0);
-
-  // Gerar estatísticas globais dos artigos mais comprados (de todos os meses)
+  // Estatísticas globais
   useEffect(() => {
     const keys = getMonthKeys();
     const artigoMap = {};
+    const totals = [];
 
     keys.forEach(month => {
       const data = JSON.parse(localStorage.getItem(month));
       if (!data) return;
+
+      // Total gasto no mês
+      let totalMes = 0;
+
       data.forEach(item => {
         if (!item.nome) return;
         if (!artigoMap[item.nome]) {
@@ -95,16 +115,27 @@ function App() {
             gasto: 0,
           };
         }
-        artigoMap[item.nome].quantidade += item.quantidade || 1;
-        artigoMap[item.nome].gasto += (item.preco || 0) * (item.quantidade || 1);
+        const qtd = item.quantidade || 1;
+        artigoMap[item.nome].quantidade += qtd;
+        artigoMap[item.nome].gasto += (item.preco || 0) * qtd;
+
+        totalMes += (item.preco || 0) * qtd;
       });
+
+      totals.push({ month, total: parseFloat(totalMes.toFixed(2)) });
     });
 
     const artigosArr = Object.values(artigoMap);
     artigosArr.sort((a, b) => b.quantidade - a.quantidade);
 
     setStats(artigosArr);
+    setMonthlyTotals(totals.sort((a,b) => a.month.localeCompare(b.month)));
   }, [monthKeys]);
+
+  const totalMes = artigos.reduce((acc, item, idx) => {
+    const qtd = quantidades[idx] || 1;
+    return acc + item.preco * qtd;
+  }, 0);
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
@@ -122,7 +153,6 @@ function App() {
         const data = await res.json();
         setArtigos(data.artigos || []);
         setQuantidades({});
-        // Se estiveres a ver o mês atual, guarda os dados
         if (selectedMonth === new Date().toISOString().slice(0,7)) {
           const toSave = (data.artigos || []).map(item => ({ ...item, quantidade: 1 }));
           localStorage.setItem(selectedMonth, JSON.stringify(toSave));
@@ -138,7 +168,7 @@ function App() {
   };
 
   return (
-    <div style={{ padding: 20, maxWidth: 900, margin: 'auto' }}>
+    <div style={{ padding: 20, maxWidth: 1000, margin: 'auto' }}>
       <h1>Faturas Continente</h1>
       <input type="file" accept="application/pdf" onChange={handleFileUpload} />
       {loading && <p>A processar…</p>}
@@ -152,6 +182,17 @@ function App() {
             ))}
           </select>
         </label>
+        <button
+          style={{ marginLeft: 10 }}
+          onClick={() => downloadCSV(artigos.map((item, idx) => ({
+            Nome: item.nome,
+            Preco: item.preco.toFixed(2),
+            Quantidade: quantidades[idx] || 1,
+            Total: ((quantidades[idx] || 1) * item.preco).toFixed(2),
+          })), `faturas_${selectedMonth}.csv`)}
+        >
+          Exportar CSV do mês
+        </button>
       </section>
 
       {artigos.length > 0 ? (
@@ -197,27 +238,47 @@ function App() {
 
       <section style={{ marginTop: 40 }}>
         <h2>Estatísticas dos artigos mais comprados (todos os meses)</h2>
+        <button onClick={() => downloadCSV(stats.map(s => ({
+          Nome: s.nome,
+          Quantidade: s.quantidade.toFixed(2),
+          Gasto: s.gasto.toFixed(2),
+        })), 'estatisticas_artigos.csv')}>
+          Exportar CSV Estatísticas
+        </button>
+
         {stats.length === 0 ? (
           <p>Sem dados para mostrar.</p>
         ) : (
-          <table border="1" cellPadding="8" style={{ borderCollapse: 'collapse', width: '100%' }}>
-            <thead>
-              <tr>
-                <th>Nome</th>
-                <th>Quantidade total</th>
-                <th>Gasto total (€)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stats.map((item, idx) => (
-                <tr key={idx}>
-                  <td>{item.nome}</td>
-                  <td>{item.quantidade.toFixed(2)}</td>
-                  <td>{item.gasto.toFixed(2)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={stats.slice(0, 10)} margin={{ top: 5, right: 30, left: 20, bottom: 40 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="nome" angle={-45} textAnchor="end" interval={0} height={80} />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="quantidade" fill="#8884d8" name="Quantidade" />
+              </BarChart>
+            </ResponsiveContainer>
+          </>
+        )}
+      </section>
+
+      <section style={{ marginTop: 40 }}>
+        <h2>Total gasto por mês</h2>
+        {monthlyTotals.length === 0 ? (
+          <p>Sem dados para mostrar.</p>
+        ) : (
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={monthlyTotals} margin={{ top: 5, right: 30, left: 20, bottom: 40 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="month" />
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey="total" fill="#82ca9d" name="Total (€)" />
+            </BarChart>
+          </ResponsiveContainer>
         )}
       </section>
     </div>
