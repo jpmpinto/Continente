@@ -29,7 +29,7 @@ export const handler = async (event) => {
       const line = lines[i];
 
       // Caso 1: Linha com nome + preço final ex: "(C)CALVE MAIONESE TD 240G 1,49"
-      const singleLineMatch = line.match(/^(?:\([A-Z]\))?(.+?)\s+(\d+[.,]\d{2})$/);
+      const singleLineMatch = line.match(/^(?:\([A-Z]\))?\s*(.+?)\s+(\d+[.,]\d{2})$/);
       if (singleLineMatch) {
         artigos.push({
           nome: singleLineMatch[1].trim(),
@@ -38,21 +38,22 @@ export const handler = async (event) => {
         continue;
       }
 
-      // Caso 2: Linha nome e na próxima linha a quantidade e preços ex:
-      // "(A)ATUM POSTA OLEO VEGETAL CNT 85G"
-      // "8 X 0,937,44"
+      // Caso 2: Linha nome e na próxima linha a quantidade (decimal) e preços ex:
+      // "(A) CURGETE VERDE"
+      // "2,334 X 1,99 4,64"
       if (i + 1 < lines.length) {
         const nextLine = lines[i + 1];
-        const multiLineMatch = nextLine.match(/^(\d+)\s+X\s+(\d+[.,]\d{2})(\d+[.,]\d{2})$/);
+        const multiLineMatch = nextLine.match(/^(\d+[.,]?\d*)\s+X\s+(\d+[.,]\d{2})\s+(\d+[.,]\d{2})$/);
         if (multiLineMatch) {
-          const quantidade = parseInt(multiLineMatch[1], 10);
+          const quantidade = parseFloat(multiLineMatch[1].replace(',', '.'));
           const precoUnitario = parseFloat(multiLineMatch[2].replace(',', '.'));
-          // O último número pode ser o preço total, por segurança calculamos precoUnitario * quantidade
+          // Usamos o preço total da fatura (terceiro número) para evitar arredondamentos
+          const precoTotal = parseFloat(multiLineMatch[3].replace(',', '.'));
           artigos.push({
             nome: line.trim(),
-            preco: precoUnitario * quantidade,
+            preco: precoTotal,
           });
-          i++; // pula a linha seguinte pois já processamos
+          i++; // pular a próxima linha porque já processámos
           continue;
         }
       }
