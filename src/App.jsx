@@ -5,14 +5,10 @@ import { supabase } from './supabaseClient';
 function normalizarNome(nomeOriginal) {
   const n = nomeOriginal.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-  // Exemplo de regra: todos os atuns oleo 85g
   if (n.includes('ATUM') && n.includes('OLEO') && n.includes('85')) {
     return 'ATUM OLEO 85G CONTINENTE';
   }
-
-  // Aqui podes adicionar mais regras:
-  // if (n.includes('COCA COLA')) return 'COCA COLA';
-  // if (n.includes('LEITE MAGRO')) return 'LEITE MAGRO';
+  // Adiciona outras regras se quiseres
 
   return nomeOriginal;
 }
@@ -27,6 +23,10 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [uploadLoading, setUploadLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Datas para filtro
+  const [dataInicio, setDataInicio] = useState('');
+  const [dataFim, setDataFim] = useState('');
 
   // 🔑 AUTH
   useEffect(() => {
@@ -50,6 +50,13 @@ export default function App() {
     }
   }, [user]);
 
+  useEffect(() => {
+    // Atualiza os artigos agregados quando datas, faturas ou sortBy mudam
+    if (faturas.length) {
+      fetchArtigosAgregados(faturas);
+    }
+  }, [dataInicio, dataFim, faturas, sortBy]);
+
   async function fetchFaturas() {
     if (!user) return;
     setLoadingFaturas(true);
@@ -59,12 +66,11 @@ export default function App() {
         .from('invoices')
         .select('*')
         .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
+        .order('invoice_date', { ascending: false });
 
       if (error) throw error;
       setFaturas(data);
       setSelectedInvoice(null);
-      await fetchArtigosAgregados(data);
     } catch (err) {
       console.error('❌ Erro ao carregar faturas:', err);
       setError('Erro ao carregar faturas: ' + err.message);
@@ -78,25 +84,38 @@ export default function App() {
       setArtigosAgregados([]);
       return;
     }
+
+    // Filtra faturas por intervalo de datas
+    const faturasFiltradas = faturasList.filter((f) => {
+      if (dataInicio && new Date(f.invoice_date) < new Date(dataInicio)) return false;
+      if (dataFim && new Date(f.invoice_date) > new Date(dataFim)) return false;
+      return true;
+    });
+
+    if (faturasFiltradas.length === 0) {
+      setArtigosAgregados([]);
+      return;
+    }
+
     try {
-      const invoiceIds = faturasList.map((f) => f.id);
+      const invoiceIds = faturasFiltradas.map((f) => f.id);
       const { data: itens, error } = await supabase
         .from('invoice_items')
-        .select('nome, quantidade, preco')
+        .select('id, nome, quantidade, preco')
         .in('invoice_id', invoiceIds);
       if (error) throw error;
 
       const agrupados = {};
-      itens.forEach(({ nome, quantidade, preco }) => {
-        // Ignora quantidades não inteiras
+      itens.forEach(({ id, nome, quantidade, preco }) => {
         if (!Number.isInteger(quantidade)) return;
 
         const nomeNormalizado = normalizarNome(nome);
         if (!agrupados[nomeNormalizado]) {
-          agrupados[nomeNormalizado] = { nome: nomeNormalizado, quantidade: 0, valor: 0 };
+          agrupados[nomeNormalizado] = { nome: nomeNormalizado, quantidade: 0, valor: 0, ids: [] };
         }
         agrupados[nomeNormalizado].quantidade += quantidade;
         agrupados[nomeNormalizado].valor += preco;
+        agrupados[nomeNormalizado].ids.push(id); // guardar ids para edição
       });
 
       let result = Object.values(agrupados);
@@ -114,7 +133,6 @@ export default function App() {
 
   function changeSort(by) {
     setSortBy(by);
-    fetchArtigosAgregados(faturas);
   }
 
   async function openInvoice(id) {
@@ -257,6 +275,27 @@ export default function App() {
     document.body.removeChild(link);
   }
 
+  // Edição inline do nome dos artigos agregados
+  async function saveNomeAgregado(oldNome, novoNome) {
+    if (!novoNome.trim() || novoNome === oldNome) return;
+
+    setError('');
+    try {
+      // Para simplificar, atualizamos todos os invoice_items que têm o nome antigo para o novo
+      const { error } = await supabase
+        .from('invoice_items')
+        .update({ nome: novoNome })
+        .ilike('nome', oldNome);
+      if (error) throw error;
+
+      // Depois refetch dos faturas para atualizar
+      fetchFaturas();
+    } catch (err) {
+      console.error('❌ Erro ao atualizar nome do artigo agregado:', err);
+      setError('Erro ao atualizar nome do artigo: ' + err.message);
+    }
+  }
+
   const artigosFiltrados = artigosAgregados.filter((a) =>
     a.nome.toLowerCase().includes(searchTerm.toLowerCase())
   );
@@ -299,6 +338,35 @@ export default function App() {
       {uploadLoading && <p>A carregar faturas...</p>}
       {error && <p style={{ color: 'red' }}>{error}</p>}
 
+      <h2>Filtro por datas das faturas</h2>
+      <div style={{ marginBottom: 15 }}>
+        <label>
+          Data Início:{' '}
+          <input
+            type="date"
+            value={dataInicio}
+            onChange={(e) => setDataInicio(e.target.value)}
+          />
+        </label>
+        <label style={{ marginLeft: 20 }}>
+          Data Fim:{' '}
+          <input
+            type="date"
+            value={dataFim}
+            onChange={(e) => setDataFim(e.target.value)}
+          />
+        </label>
+        <button
+          style={{ marginLeft: 20 }}
+          onClick={() => {
+            setDataInicio('');
+            setDataFim('');
+          }}
+        >
+          Limpar filtro
+        </button>
+      </div>
+
       <h2>Artigos agregados</h2>
       <input
         type="text"
@@ -321,18 +389,14 @@ export default function App() {
       <table style={{ width: '100%', marginTop: 10, marginBottom: 30, borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ backgroundColor: '#eee' }}>
-            <th style={{ border: '1px solid #ccc', padding: 8 }}>Artigo</th>
+            <th style={{ border: '1px solid #ccc', padding: 8 }}>Artigo (editar inline)</th>
             <th style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>Qtd Total</th>
             <th style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>Valor Total (€)</th>
           </tr>
         </thead>
         <tbody>
           {artigosFiltrados.map((a) => (
-            <tr key={a.nome}>
-              <td style={{ border: '1px solid #ccc', padding: 8 }}>{a.nome}</td>
-              <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>{a.quantidade}</td>
-              <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>{a.valor.toFixed(2)}</td>
-            </tr>
+            <EditableAgregadoRow key={a.nome} artigo={a} onSaveNome={saveNomeAgregado} />
           ))}
         </tbody>
       </table>
@@ -395,6 +459,60 @@ export default function App() {
   );
 }
 
+// Linha editável do agregado, só o nome editável inline
+function EditableAgregadoRow({ artigo, onSaveNome }) {
+  const [editMode, setEditMode] = useState(false);
+  const [nomeEdit, setNomeEdit] = useState(artigo.nome);
+
+  return (
+    <tr>
+      <td style={{ border: '1px solid #ccc', padding: 8 }}>
+        {editMode ? (
+          <>
+            <input
+              type="text"
+              value={nomeEdit}
+              onChange={(e) => setNomeEdit(e.target.value)}
+              style={{ width: '100%' }}
+            />
+            <div style={{ marginTop: 4 }}>
+              <button
+                onClick={() => {
+                  onSaveNome(artigo.nome, nomeEdit);
+                  setEditMode(false);
+                }}
+                disabled={!nomeEdit.trim() || nomeEdit === artigo.nome}
+              >
+                Guardar
+              </button>
+              <button onClick={() => {
+                setNomeEdit(artigo.nome);
+                setEditMode(false);
+              }} style={{ marginLeft: 8 }}>
+                Cancelar
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            {artigo.nome}
+            <button
+              style={{ marginLeft: 8 }}
+              onClick={() => setEditMode(true)}
+              title="Editar nome"
+            >
+              ✎
+            </button>
+          </>
+        )}
+      </td>
+      <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>{artigo.quantidade}</td>
+      <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>{artigo.valor.toFixed(2)}</td>
+    </tr>
+  );
+}
+
+// Linha editável dos itens da fatura
 function EditableItemRow({ item, onSave, onDelete }) {
   const [editMode, setEditMode] = useState(false);
   const [quantidade, setQuantidade] = useState(item.quantidade);
