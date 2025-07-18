@@ -1,75 +1,56 @@
 import pdf from 'pdf-parse';
 
-export const handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return {
-      statusCode: 405,
-      body: JSON.stringify({ error: 'Method not allowed' }),
-      headers: { 'Content-Type': 'application/json' },
-    };
-  }
-
+export default async function handler(req, res) {
   try {
-    const { pdfBase64 } = JSON.parse(event.body);
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    const { pdfBase64 } = req.body;
     if (!pdfBase64) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: 'Missing pdfBase64 in body' }),
-        headers: { 'Content-Type': 'application/json' },
-      };
+      return res.status(400).json({ error: 'Missing pdfBase64 in body' });
     }
 
     const dataBuffer = Buffer.from(pdfBase64, 'base64');
     const data = await pdf(dataBuffer);
+    const text = data.text;
 
-    const lines = data.text.split('\n').map(l => l.trim()).filter(Boolean);
+    // --- Extrair data ---
+    const dateMatch = text.match(/\d{2}\/\d{2}\/\d{4}/);
+    const invoiceDate = dateMatch ? dateMatch[0] : '';
 
+    // --- Extrair total a pagar ---
+    const totalMatch = text.match(/TOTAL A PAGAR\s*([\d,.]+)/i);
+    const total = totalMatch ? parseFloat(totalMatch[1].replace(',', '.')) : 0;
+
+    // --- Extrair artigos ---
+    // Padrão para capturar linhas como:
+    // (A)ATUM POSTA OLEO VEGETAL CNT 85G 8 X 0,93 7,44
+    const artigoRegex = /([A-ZÇ0-9\s\.\-\/]+?)\s+([\d,.]+)\s*X\s*([\d,.]+)\s+([\d,.]+)/g;
     const artigos = [];
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+    let match;
 
-      // Caso 1: Linha com nome + preço final ex: "(C)CALVE MAIONESE TD 240G 1,49"
-      const singleLineMatch = line.match(/^(?:\([A-Z]\))?(.+?)\s+(\d+[.,]\d{2})$/);
-      if (singleLineMatch) {
-        artigos.push({
-          nome: singleLineMatch[1].trim(),
-          preco: parseFloat(singleLineMatch[2].replace(',', '.')),
-        });
-        continue;
-      }
+    while ((match = artigoRegex.exec(text)) !== null) {
+      const nome = match[1].trim().replace(/\s+/g, ' ');
+      const quantidade = parseFloat(match[2].replace(',', '.'));
+      const precoUnit = parseFloat(match[3].replace(',', '.'));
+      // const totalLinha = parseFloat(match[4].replace(',', '.')); // se precisares do total por linha
 
-      // Caso 2: Linha nome e na próxima linha a quantidade e preços ex:
-      // "(A)ATUM POSTA OLEO VEGETAL CNT 85G"
-      // "8 X 0,937,44"
-      if (i + 1 < lines.length) {
-        const nextLine = lines[i + 1];
-        const multiLineMatch = nextLine.match(/^(\d+)\s+X\s+(\d+[.,]\d{2})(\d+[.,]\d{2})$/);
-        if (multiLineMatch) {
-          const quantidade = parseInt(multiLineMatch[1], 10);
-          const precoUnitario = parseFloat(multiLineMatch[2].replace(',', '.'));
-          // O último número pode ser o preço total, por segurança calculamos precoUnitario * quantidade
-          artigos.push({
-            nome: line.trim(),
-            preco: precoUnitario * quantidade,
-          });
-          i++; // pula a linha seguinte pois já processamos
-          continue;
-        }
-      }
+      artigos.push({
+        nome,
+        quantidade,
+        preco: precoUnit
+      });
     }
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ artigos }),
-      headers: { 'Content-Type': 'application/json' },
-    };
+    return res.status(200).json({
+      invoiceDate,
+      total,
+      artigos
+    });
 
   } catch (error) {
-    console.error('Error parsing PDF:', error);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: 'Failed to parse PDF', details: error.message }),
-      headers: { 'Content-Type': 'application/json' },
-    };
+    console.error('Erro no process-invoice:', error);
+    return res.status(500).json({ error: 'Failed to process PDF', details: error.message });
   }
-};
+}
