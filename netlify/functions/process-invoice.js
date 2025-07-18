@@ -11,7 +11,6 @@ export const handler = async (event) => {
 
   try {
     const { pdfBase64 } = JSON.parse(event.body);
-
     if (!pdfBase64) {
       return {
         statusCode: 400,
@@ -23,11 +22,12 @@ export const handler = async (event) => {
     const dataBuffer = Buffer.from(pdfBase64, 'base64');
     const data = await pdf(dataBuffer);
 
+    // Exemplo simples de parser:
     const artigos = [];
     const lines = data.text.split('\n');
 
     lines.forEach(line => {
-      // Exemplo: procura linhas com "nome ... preço" (ex: "Arroz 2,50")
+      // Ajusta o regex ao teu formato real
       const match = line.match(/^(.+?)\s+(\d+,\d{2})$/);
       if (match) {
         artigos.push({
@@ -40,7 +40,7 @@ export const handler = async (event) => {
     return {
       statusCode: 200,
       body: JSON.stringify({ artigos }),
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
     };
 
   } catch (error) {
