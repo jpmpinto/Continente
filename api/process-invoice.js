@@ -1,47 +1,44 @@
-import pdf from 'pdf-parse';
-import fs from 'fs/promises';
-import path from 'path';
+const pdf = require('pdf-parse');
 
-export default async function handler(req, res) {
+module.exports = async (req, res) => {
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
   }
 
   try {
-    const { pdfBase64 } = req.body;
-    if (!pdfBase64) {
-      return res.status(400).json({ error: 'Missing pdfBase64' });
-    }
+    let body = '';
+    req.on('data', chunk => { body += chunk.toString(); });
+    req.on('end', async () => {
+      const { pdfBase64 } = JSON.parse(body);
 
-    const buffer = Buffer.from(pdfBase64, 'base64');
-    const data = await pdf(buffer);
+      if (!pdfBase64) {
+        res.status(400).json({ error: 'Missing pdfBase64' });
+        return;
+      }
 
-    const artigos = extrairArtigos(data.text);
+      const buffer = Buffer.from(pdfBase64, 'base64');
+      const data = await pdf(buffer);
 
-    const filePath = path.join(process.cwd(), 'data', 'invoices.json');
-    let existing = [];
-    try {
-      const raw = await fs.readFile(filePath, 'utf8');
-      existing = JSON.parse(raw);
-    } catch (_) {}
-    existing.push(...artigos);
-    await fs.mkdir(path.join(process.cwd(), 'data'), { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(existing, null, 2));
-
-    res.status(200).json({ ok: true, artigos });
+      const artigos = extrairArtigos(data.text);
+      res.status(200).json({ artigos });
+    });
   } catch (err) {
-    console.error(err);
+    console.error('Erro ao processar PDF', err);
     res.status(500).json({ error: err.message });
   }
-}
+};
 
 function extrairArtigos(texto) {
   const linhas = texto.split('\n');
   const artigos = [];
   for (const linha of linhas) {
-    const match = linha.match(/^(.+?)\s+(\d+,\d{2})$/);
+    const match = linha.match(/^(.+?)\\s+(\\d+,\\d{2})$/);
     if (match) {
-      artigos.push({ nome: match[1].trim(), preco: parseFloat(match[2].replace(',', '.')) });
+      artigos.push({
+        nome: match[1].trim(),
+        preco: parseFloat(match[2].replace(',', '.'))
+      });
     }
   }
   return artigos;
