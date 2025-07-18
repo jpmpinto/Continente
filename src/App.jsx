@@ -1,6 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
 
+// 🔎 Função para normalizar nomes semelhantes
+function normalizarNome(nomeOriginal) {
+  const n = nomeOriginal.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  // Exemplo de regra: todos os atuns oleo 85g
+  if (n.includes('ATUM') && n.includes('OLEO') && n.includes('85')) {
+    return 'ATUM OLEO 85G CONTINENTE';
+  }
+
+  // Aqui podes adicionar mais regras:
+  // if (n.includes('COCA COLA')) return 'COCA COLA';
+  // if (n.includes('LEITE MAGRO')) return 'LEITE MAGRO';
+
+  return nomeOriginal;
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [faturas, setFaturas] = useState([]);
@@ -72,11 +88,15 @@ export default function App() {
 
       const agrupados = {};
       itens.forEach(({ nome, quantidade, preco }) => {
-        if (!agrupados[nome]) {
-          agrupados[nome] = { nome, quantidade: 0, valor: 0 };
+        // Ignora quantidades não inteiras
+        if (!Number.isInteger(quantidade)) return;
+
+        const nomeNormalizado = normalizarNome(nome);
+        if (!agrupados[nomeNormalizado]) {
+          agrupados[nomeNormalizado] = { nome: nomeNormalizado, quantidade: 0, valor: 0 };
         }
-        agrupados[nome].quantidade += quantidade;
-        agrupados[nome].valor += preco;
+        agrupados[nomeNormalizado].quantidade += quantidade;
+        agrupados[nomeNormalizado].valor += preco;
       });
 
       let result = Object.values(agrupados);
