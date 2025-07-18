@@ -8,27 +8,22 @@ export default function App() {
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [artigosAgregados, setArtigosAgregados] = useState([]);
   const [sortBy, setSortBy] = useState('quantidade');
+  const [searchTerm, setSearchTerm] = useState(''); // 🔎 filtro pesquisa
   const [uploadLoading, setUploadLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Observar user logado
+  // 🔑 AUTH
   useEffect(() => {
-    // Primeiro obter sessão atual
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user ?? null);
     });
-
-    // Listener de alterações de auth
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
     });
-
-    return () => {
-      listener?.subscription.unsubscribe();
-    };
+    return () => listener?.subscription.unsubscribe();
   }, []);
 
-  // Carregar faturas quando user está definido
+  // 🔄 CARREGAR Faturas e Artigos Agregados
   useEffect(() => {
     if (user) {
       fetchFaturas();
@@ -37,11 +32,10 @@ export default function App() {
       setSelectedInvoice(null);
       setArtigosAgregados([]);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]); // só reage a mudanças no user
+  }, [user]);
 
   async function fetchFaturas() {
-    if (!user) return; // segurança extra
+    if (!user) return;
     setLoadingFaturas(true);
     setError('');
     try {
@@ -98,6 +92,11 @@ export default function App() {
     }
   }
 
+  function changeSort(by) {
+    setSortBy(by);
+    fetchArtigosAgregados(faturas);
+  }
+
   async function openInvoice(id) {
     try {
       const { data: invoice, error } = await supabase
@@ -144,6 +143,19 @@ export default function App() {
     } catch (err) {
       console.error('❌ Erro ao guardar artigo:', err);
       setError('Erro ao guardar artigo: ' + err.message);
+    }
+  }
+
+  async function deleteItem(itemId) {
+    if (!window.confirm('Tem a certeza que quer apagar este artigo?')) return;
+    try {
+      const { error } = await supabase.from('invoice_items').delete().eq('id', itemId);
+      if (error) throw error;
+      openInvoice(selectedInvoice.id);
+      fetchFaturas();
+    } catch (err) {
+      console.error('❌ Erro ao apagar artigo:', err);
+      setError('Erro ao apagar artigo: ' + err.message);
     }
   }
 
@@ -194,10 +206,10 @@ export default function App() {
     }
   }
 
-  function changeSort(by) {
-    setSortBy(by);
-    fetchArtigosAgregados(faturas);
-  }
+  // 🔎 Aplicar filtro de pesquisa
+  const artigosFiltrados = artigosAgregados.filter((a) =>
+    a.nome.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   if (!user) {
     return (
@@ -232,13 +244,21 @@ export default function App() {
       {error && <p style={{ color: 'red' }}>{error}</p>}
 
       <h2>Artigos agregados</h2>
-      <button onClick={() => changeSort('quantidade')} disabled={sortBy === 'quantidade'}>
-        Ordenar por Quantidade
-      </button>
-      <button onClick={() => changeSort('valor')} disabled={sortBy === 'valor'}>
-        Ordenar por Valor
-      </button>
-
+      <input
+        type="text"
+        placeholder="Pesquisar artigo..."
+        value={searchTerm}
+        onChange={(e) => setSearchTerm(e.target.value)}
+        style={{ marginBottom: 10, padding: 5, width: '100%' }}
+      />
+      <div style={{ marginBottom: 10 }}>
+        <button onClick={() => changeSort('quantidade')} disabled={sortBy === 'quantidade'}>
+          Ordenar por Quantidade
+        </button>
+        <button onClick={() => changeSort('valor')} disabled={sortBy === 'valor'}>
+          Ordenar por Valor
+        </button>
+      </div>
       <table style={{ width: '100%', marginTop: 10, marginBottom: 30, borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ backgroundColor: '#eee' }}>
@@ -248,7 +268,7 @@ export default function App() {
           </tr>
         </thead>
         <tbody>
-          {artigosAgregados.map((a) => (
+          {artigosFiltrados.map((a) => (
             <tr key={a.nome}>
               <td style={{ border: '1px solid #ccc', padding: 8 }}>{a.nome}</td>
               <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>{a.quantidade}</td>
@@ -296,12 +316,17 @@ export default function App() {
                 <th style={{ border: '1px solid #ccc', padding: 8 }}>Artigo</th>
                 <th style={{ border: '1px solid #ccc', padding: 8 }}>Quantidade</th>
                 <th style={{ border: '1px solid #ccc', padding: 8 }}>Preço (€)</th>
-                <th style={{ border: '1px solid #ccc', padding: 8 }}>Editar</th>
+                <th style={{ border: '1px solid #ccc', padding: 8 }}>Ações</th>
               </tr>
             </thead>
             <tbody>
               {selectedInvoice.items.map((item) => (
-                <EditableItemRow key={item.id} item={item} onSave={saveItemChanges} />
+                <EditableItemRow
+                  key={item.id}
+                  item={item}
+                  onSave={saveItemChanges}
+                  onDelete={deleteItem}
+                />
               ))}
             </tbody>
           </table>
@@ -311,7 +336,7 @@ export default function App() {
   );
 }
 
-function EditableItemRow({ item, onSave }) {
+function EditableItemRow({ item, onSave, onDelete }) {
   const [editMode, setEditMode] = useState(false);
   const [quantidade, setQuantidade] = useState(item.quantidade);
   const [preco, setPreco] = useState(item.preco);
@@ -358,7 +383,15 @@ function EditableItemRow({ item, onSave }) {
             <button onClick={() => setEditMode(false)}>Cancelar</button>
           </>
         ) : (
-          <button onClick={() => setEditMode(true)}>Editar</button>
+          <>
+            <button onClick={() => setEditMode(true)}>Editar</button>
+            <button
+              style={{ marginLeft: 8 }}
+              onClick={() => onDelete(item.id)}
+            >
+              Apagar
+            </button>
+          </>
         )}
       </td>
     </tr>
