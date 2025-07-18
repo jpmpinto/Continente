@@ -22,13 +22,16 @@ export const handler = async (event) => {
     const dataBuffer = Buffer.from(pdfBase64, 'base64');
     const data = await pdf(dataBuffer);
 
+    // separar linhas
     const lines = data.text.split('\n').map(l => l.trim()).filter(Boolean);
+    console.info("🔎 Total de linhas extraídas:", lines.length);
 
     const artigos = [];
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      // Caso 1: nome e preço na mesma linha
+      // 1. tentar capturar uma linha com nome + preço final
       const singleLineMatch = line.match(/^(?:\([A-Z]\))?(.+?)\s+(\d+[.,]\d{2})$/);
       if (singleLineMatch) {
         artigos.push({
@@ -39,23 +42,31 @@ export const handler = async (event) => {
         continue;
       }
 
-      // Caso 2: nome na linha atual e quantidade/preço na linha seguinte
+      // 2. tentar capturar padrão em duas linhas (nome numa linha e "quantidade X preçoUnit preçoTotal" na seguinte)
       if (i + 1 < lines.length) {
-        const nextLine = lines[i + 1];
-        const multiLineMatch = nextLine.match(/^([\d.,]+)\s+X\s+(\d+[.,]\d{2})\s+(\d+[.,]\d{2})$/);
+        const nextLineRaw = lines[i + 1];
+        const nextLine = nextLineRaw.replace(/\s+/g, ''); // remove espaços para tratar casos tipo "8 X0,937,44"
+
+        // regex permissivo: número (quantidade) X número (preço unitário) e mais um número (preço total)
+        const multiLineMatch = nextLine.match(/^(\d+(?:[.,]\d+)?)X(\d+[.,]\d+)(\d+[.,]\d+)$/);
         if (multiLineMatch) {
           const quantidade = parseFloat(multiLineMatch[1].replace(',', '.'));
           const precoUnitario = parseFloat(multiLineMatch[2].replace(',', '.'));
           artigos.push({
-            nome: line.trim().replace(/^\([A-Z]\)/, '').trim(),
+            nome: line.replace(/^\([A-Z]\)/, '').trim(),
             quantidade: quantidade,
             preco: parseFloat((quantidade * precoUnitario).toFixed(2)),
           });
-          i++;
+          i++; // saltar a linha seguinte
           continue;
         }
       }
     }
+
+    console.info("✅ Total de artigos extraídos:", artigos.length);
+    artigos.forEach((a, idx) =>
+      console.info(`Artigo ${idx + 1}: ${a.nome} (qtd ${a.quantidade}) -> €${a.preco}`)
+    );
 
     const totalFatura = artigos.reduce((acc, art) => acc + art.preco, 0);
 
@@ -64,8 +75,9 @@ export const handler = async (event) => {
       body: JSON.stringify({ artigos, totalFatura }),
       headers: { 'Content-Type': 'application/json' },
     };
+
   } catch (error) {
-    console.error('Error parsing PDF:', error);
+    console.error('❌ Erro ao processar PDF:', error);
     return {
       statusCode: 500,
       body: JSON.stringify({ error: 'Failed to parse PDF', details: error.message }),
