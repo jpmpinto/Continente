@@ -1,11 +1,48 @@
 import React, { useState } from 'react';
+import { supabase } from './supabaseClient';
 
 export default function App() {
+  // teus states aqui
   const [artigos, setArtigos] = useState([]);
   const [totalFatura, setTotalFatura] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Função para salvar no Supabase
+  const saveInvoiceToSupabase = async (artigos, totalFatura) => {
+    try {
+      // Podes definir a data da fatura aqui. Se não tiveres uma data no PDF, usa hoje:
+      const invoiceDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+      // 1. Inserir a fatura
+      const { data: invoice, error: invoiceError } = await supabase
+        .from('invoices')
+        .insert([{ invoice_date: invoiceDate, total: totalFatura }])
+        .select()
+        .single();
+
+      if (invoiceError) throw invoiceError;
+
+      // 2. Inserir artigos com invoice_id da fatura inserida
+      const itemsToInsert = artigos.map((art) => ({
+        invoice_id: invoice.id,
+        nome: art.nome,
+        quantidade: art.quantidade,
+        preco: art.preco,
+      }));
+
+      const { error: itemsError } = await supabase.from('invoice_items').insert(itemsToInsert);
+
+      if (itemsError) throw itemsError;
+
+      alert('Fatura guardada com sucesso!');
+    } catch (error) {
+      console.error('Erro ao guardar no Supabase:', error);
+      alert('Erro ao guardar fatura. Ver consola.');
+    }
+  };
+
+  // Atualiza o handleFileUpload para chamar a função de salvar
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
     if (!file) return;
@@ -16,43 +53,39 @@ export default function App() {
     setTotalFatura(0);
 
     try {
-      // Ler PDF como base64
       const reader = new FileReader();
       reader.onload = async () => {
         const base64 = reader.result.split(',')[1];
 
-        try {
-          const response = await fetch('/.netlify/functions/process-invoice', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pdfBase64: base64 }),
-          });
+        const response = await fetch('/.netlify/functions/process-invoice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pdfBase64: base64 }),
+        });
 
-          if (!response.ok) {
-            console.error('Resposta da API (não OK):', response.status);
-            throw new Error(`Erro na API: ${response.status}`);
-          }
-
-          const data = await response.json();
-          console.log('✅ Dados recebidos da API:', data);
-
-          setArtigos(data.artigos || []);
-          setTotalFatura(data.totalFatura || 0);
-        } catch (err) {
-          console.error('Erro ao processar fatura:', err);
-          setError('Erro ao processar fatura. Ver consola para detalhes.');
-        } finally {
-          setLoading(false);
+        if (!response.ok) {
+          throw new Error(`Erro na API: ${response.status}`);
         }
+
+        const data = await response.json();
+
+        setArtigos(data.artigos || []);
+        setTotalFatura(data.totalFatura || 0);
+
+        // Aqui guardas no Supabase
+        await saveInvoiceToSupabase(data.artigos || [], data.totalFatura || 0);
+
+        setLoading(false);
       };
       reader.readAsDataURL(file);
     } catch (err) {
-      console.error('Erro ao ler ficheiro:', err);
-      setError('Erro ao ler ficheiro.');
+      console.error('Erro ao processar fatura:', err);
+      setError('Erro ao processar fatura. Ver consola para detalhes.');
       setLoading(false);
     }
   };
 
+  // JSX continua igual (input, tabela, etc)
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
       <h1>📄 Carregar Fatura Continente</h1>
