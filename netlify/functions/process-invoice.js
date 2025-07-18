@@ -11,7 +11,6 @@ export const handler = async (event) => {
 
   try {
     const { pdfBase64 } = JSON.parse(event.body);
-
     if (!pdfBase64) {
       return {
         statusCode: 400,
@@ -23,13 +22,48 @@ export const handler = async (event) => {
     const dataBuffer = Buffer.from(pdfBase64, 'base64');
     const data = await pdf(dataBuffer);
 
-    console.log('Texto extraído do PDF:', data.text);
+    const lines = data.text.split('\n').map(l => l.trim()).filter(Boolean);
+
+    const artigos = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // Caso 1: Linha com nome + preço final ex: "(C)CALVE MAIONESE TD 240G 1,49"
+      const singleLineMatch = line.match(/^(?:\([A-Z]\))?(.+?)\s+(\d+[.,]\d{2})$/);
+      if (singleLineMatch) {
+        artigos.push({
+          nome: singleLineMatch[1].trim(),
+          preco: parseFloat(singleLineMatch[2].replace(',', '.')),
+        });
+        continue;
+      }
+
+      // Caso 2: Linha nome e na próxima linha a quantidade e preços ex:
+      // "(A)ATUM POSTA OLEO VEGETAL CNT 85G"
+      // "8 X 0,937,44"
+      if (i + 1 < lines.length) {
+        const nextLine = lines[i + 1];
+        const multiLineMatch = nextLine.match(/^(\d+)\s+X\s+(\d+[.,]\d{2})(\d+[.,]\d{2})$/);
+        if (multiLineMatch) {
+          const quantidade = parseInt(multiLineMatch[1], 10);
+          const precoUnitario = parseFloat(multiLineMatch[2].replace(',', '.'));
+          // O último número pode ser o preço total, por segurança calculamos precoUnitario * quantidade
+          artigos.push({
+            nome: line.trim(),
+            preco: precoUnitario * quantidade,
+          });
+          i++; // pula a linha seguinte pois já processamos
+          continue;
+        }
+      }
+    }
 
     return {
       statusCode: 200,
-      body: JSON.stringify({ artigos: [] }),
+      body: JSON.stringify({ artigos }),
       headers: { 'Content-Type': 'application/json' },
     };
+
   } catch (error) {
     console.error('Error parsing PDF:', error);
     return {
