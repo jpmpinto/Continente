@@ -1,10 +1,40 @@
 import React, { useState } from 'react';
+import { supabase } from './supabaseClient'; // importa o client já configurado
 
 export default function App() {
   const [artigos, setArtigos] = useState([]);
   const [totalFatura, setTotalFatura] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const saveInvoiceToSupabase = async (artigos, total) => {
+    try {
+      // 1. Insere a fatura e recupera o id
+      const { data: invoice, error: invoiceError } = await supabase
+        .from('invoices')
+        .insert([{ total }])
+        .select()
+        .single();
+
+      if (invoiceError) throw invoiceError;
+
+      // 2. Insere os artigos associados à fatura
+      const itemsToInsert = artigos.map((art) => ({
+        invoice_id: invoice.id,
+        nome: art.nome,
+        quantidade: art.quantidade ?? 1,
+        preco: art.preco,
+      }));
+
+      const { error: itemsError } = await supabase.from('invoice_items').insert(itemsToInsert);
+      if (itemsError) throw itemsError;
+
+      alert('Fatura guardada com sucesso!');
+    } catch (error) {
+      console.error('Erro ao guardar no Supabase:', error);
+      alert('Erro ao guardar fatura. Veja o console.');
+    }
+  };
 
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
@@ -27,18 +57,18 @@ export default function App() {
             body: JSON.stringify({ pdfBase64: base64 }),
           });
 
-          if (!response.ok) {
-            throw new Error(`Erro na API: ${response.status}`);
-          }
+          if (!response.ok) throw new Error(`Erro na API: ${response.status}`);
 
           const data = await response.json();
-          console.log('Dados recebidos da API:', data);
 
           setArtigos(data.artigos || []);
           setTotalFatura(data.totalFatura || 0);
+
+          // Guardar no Supabase
+          await saveInvoiceToSupabase(data.artigos || [], data.totalFatura || 0);
         } catch (err) {
           console.error('Erro ao processar fatura:', err);
-          setError('Erro ao processar fatura. Ver consola para detalhes.');
+          setError('Erro ao processar fatura. Veja console para detalhes.');
         } finally {
           setLoading(false);
         }
