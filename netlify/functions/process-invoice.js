@@ -1,37 +1,40 @@
-// netlify/functions/process-invoice.js
-exports.handler = async (event, context) => {
-  // Apenas aceita POST
+import pdf from 'pdf-parse';
+
+export const handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return {
       statusCode: 405,
+      body: JSON.stringify({ error: 'Method not allowed' }),
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'Method Not Allowed' })
     };
   }
 
   try {
-    // O body vem como string JSON
-    const body = JSON.parse(event.body);
+    const { pdfBase64 } = JSON.parse(event.body);
 
-    // Aqui terias a lógica de processar o PDF.
-    // Para já vamos devolver um mock para confirmar que funciona:
-    const artigos = [
-      { nome: 'Produto Teste A', preco: 1.99 },
-      { nome: 'Produto Teste B', preco: 3.50 },
-      { nome: 'Produto Teste C', preco: 0.99 }
-    ];
+    if (!pdfBase64) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: 'Missing pdfBase64 in body' }),
+        headers: { 'Content-Type': 'application/json' },
+      };
+    }
+
+    const dataBuffer = Buffer.from(pdfBase64, 'base64');
+
+    const data = await pdf(dataBuffer);
 
     return {
       statusCode: 200,
+      body: JSON.stringify({ text: data.text }),
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ artigos })
     };
-  } catch (err) {
-    console.error('Erro ao processar fatura:', err);
+  } catch (error) {
+    console.error('Error parsing PDF:', error);
     return {
       statusCode: 500,
+      body: JSON.stringify({ error: 'Failed to parse PDF', details: error.message }),
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'Erro interno ao processar fatura' })
     };
   }
 };
