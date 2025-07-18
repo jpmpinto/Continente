@@ -10,7 +10,7 @@ export const handler = async (event) => {
   }
 
   try {
-    const { pdfBase64 } = JSON.parse(event.body);
+    const { pdfBase64 } = JSON.parse(event.body || '{}');
     if (!pdfBase64) {
       return {
         statusCode: 400,
@@ -19,19 +19,22 @@ export const handler = async (event) => {
       };
     }
 
+    // Converter Base64 em buffer
     const dataBuffer = Buffer.from(pdfBase64, 'base64');
+
+    // Ler o PDF com pdf-parse
     const data = await pdf(dataBuffer);
 
-    // separar linhas
-    const lines = data.text.split('\n').map(l => l.trim()).filter(Boolean);
-    console.info("🔎 Total de linhas extraídas:", lines.length);
+    // Separar texto em linhas
+    const lines = data.text.split('\n').map((l) => l.trim()).filter(Boolean);
+    console.info('🔎 Total de linhas extraídas:', lines.length);
 
     const artigos = [];
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      // 1. tentar capturar uma linha com nome + preço final
+      // Caso simples: nome + preço na mesma linha
       const singleLineMatch = line.match(/^(?:\([A-Z]\))?(.+?)\s+(\d+[.,]\d{2})$/);
       if (singleLineMatch) {
         artigos.push({
@@ -42,12 +45,11 @@ export const handler = async (event) => {
         continue;
       }
 
-      // 2. tentar capturar padrão em duas linhas (nome numa linha e "quantidade X preçoUnit preçoTotal" na seguinte)
+      // Caso nome na linha e detalhe na seguinte
       if (i + 1 < lines.length) {
         const nextLineRaw = lines[i + 1];
-        const nextLine = nextLineRaw.replace(/\s+/g, ''); // remove espaços para tratar casos tipo "8 X0,937,44"
+        const nextLine = nextLineRaw.replace(/\s+/g, ''); // remover espaços
 
-        // regex permissivo: número (quantidade) X número (preço unitário) e mais um número (preço total)
         const multiLineMatch = nextLine.match(/^(\d+(?:[.,]\d+)?)X(\d+[.,]\d+)(\d+[.,]\d+)$/);
         if (multiLineMatch) {
           const quantidade = parseFloat(multiLineMatch[1].replace(',', '.'));
@@ -57,13 +59,13 @@ export const handler = async (event) => {
             quantidade: quantidade,
             preco: parseFloat((quantidade * precoUnitario).toFixed(2)),
           });
-          i++; // saltar a linha seguinte
+          i++;
           continue;
         }
       }
     }
 
-    console.info("✅ Total de artigos extraídos:", artigos.length);
+    console.info('✅ Total de artigos extraídos:', artigos.length);
     artigos.forEach((a, idx) =>
       console.info(`Artigo ${idx + 1}: ${a.nome} (qtd ${a.quantidade}) -> €${a.preco}`)
     );
@@ -75,7 +77,6 @@ export const handler = async (event) => {
       body: JSON.stringify({ artigos, totalFatura }),
       headers: { 'Content-Type': 'application/json' },
     };
-
   } catch (error) {
     console.error('❌ Erro ao processar PDF:', error);
     return {
