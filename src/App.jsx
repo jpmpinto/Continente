@@ -1,140 +1,126 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
 
 export default function App() {
-  const [artigos, setArtigos] = useState([]);
-  const [totalFatura, setTotalFatura] = useState(0);
+  const [invoices, setInvoices] = useState([]);
+  const [selectedInvoice, setSelectedInvoice] = useState(null);
+  const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
 
-  const saveInvoiceToSupabase = async (artigos, totalFatura) => {
-    try {
-      const invoiceDate = new Date().toISOString().split('T')[0];
+  // Fetch invoices on mount
+  useEffect(() => {
+    fetchInvoices();
+  }, []);
 
-      const { data: invoice, error: invoiceError } = await supabase
-        .from('invoices')
-        .insert([{ invoice_date: invoiceDate, total: totalFatura }])
-        .select()
-        .single();
-
-      if (invoiceError) {
-        console.error('Invoice insert error details:', invoiceError);
-        throw invoiceError;
-      }
-
-      const itemsToInsert = artigos.map((art) => ({
-        invoice_id: invoice.id,
-        nome: art.nome,
-        quantidade: Math.floor(art.quantidade), // garantir inteiro
-        preco: parseFloat(art.preco.toFixed(2)), // garantir número decimal
-      }));
-
-      const { error: itemsError } = await supabase.from('invoice_items').insert(itemsToInsert);
-
-      if (itemsError) {
-        console.error('Invoice items insert error details:', itemsError);
-        throw itemsError;
-      }
-
-      alert('Fatura guardada com sucesso!');
-    } catch (error) {
-      console.error('Erro ao guardar no Supabase:', error);
-      alert('Erro ao guardar fatura. Ver consola.');
-    }
-  };
-
-  const handleFileUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
+  async function fetchInvoices() {
     setLoading(true);
-    setError('');
-    setArtigos([]);
-    setTotalFatura(0);
-
-    try {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const base64 = reader.result.split(',')[1];
-
-        try {
-          const response = await fetch('/.netlify/functions/process-invoice', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pdfBase64: base64 }),
-          });
-
-          if (!response.ok) {
-            console.error('Resposta da API (não OK):', response.status);
-            throw new Error(`Erro na API: ${response.status}`);
-          }
-
-          const data = await response.json();
-          console.log('✅ Dados recebidos da API:', data);
-
-          setArtigos(data.artigos || []);
-          setTotalFatura(data.totalFatura || 0);
-
-          // Guardar no Supabase
-          await saveInvoiceToSupabase(data.artigos || [], data.totalFatura || 0);
-
-        } catch (err) {
-          console.error('Erro ao processar fatura:', err);
-          setError('Erro ao processar fatura. Ver consola para detalhes.');
-        } finally {
-          setLoading(false);
-        }
-      };
-      reader.readAsDataURL(file);
-    } catch (err) {
-      console.error('Erro ao ler ficheiro:', err);
-      setError('Erro ao ler ficheiro.');
-      setLoading(false);
+    const { data, error } = await supabase
+      .from('invoices')
+      .select('id, invoice_date, total')
+      .order('invoice_date', { ascending: false });
+    if (error) {
+      alert('Erro a buscar faturas: ' + error.message);
+    } else {
+      setInvoices(data);
     }
-  };
+    setLoading(false);
+  }
+
+  // Fetch items for a selected invoice
+  async function fetchInvoiceItems(invoiceId) {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('invoice_items')
+      .select('id, nome, quantidade, preco')
+      .eq('invoice_id', invoiceId);
+    if (error) {
+      alert('Erro a buscar artigos: ' + error.message);
+      setItems([]);
+    } else {
+      setItems(data);
+    }
+    setLoading(false);
+  }
+
+  function openInvoiceDetails(invoice) {
+    setSelectedInvoice(invoice);
+    fetchInvoiceItems(invoice.id);
+  }
+
+  function closeInvoiceDetails() {
+    setSelectedInvoice(null);
+    setItems([]);
+  }
 
   return (
-    <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
-      <h1>📄 Carregar Fatura Continente</h1>
-      <input type="file" accept="application/pdf" onChange={handleFileUpload} />
-      {loading && <p>A processar fatura...</p>}
-      {error && <p style={{ color: 'red' }}>{error}</p>}
+    <div style={{ padding: 20, fontFamily: 'Arial, sans-serif' }}>
+      <h1>📄 Lista de Faturas Guardadas</h1>
+      {loading && <p>Carregando...</p>}
+      {!loading && invoices.length === 0 && <p>Nenhuma fatura encontrada.</p>}
+      {!loading && invoices.length > 0 && (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ backgroundColor: '#eee' }}>
+              <th style={{ border: '1px solid #ccc', padding: 8 }}>Data</th>
+              <th style={{ border: '1px solid #ccc', padding: 8 }}>Total (€)</th>
+              <th style={{ border: '1px solid #ccc', padding: 8 }}>Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            {invoices.map(inv => (
+              <tr key={inv.id}>
+                <td style={{ border: '1px solid #ccc', padding: 8 }}>{new Date(inv.invoice_date).toLocaleDateString()}</td>
+                <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>{inv.total.toFixed(2)}</td>
+                <td style={{ border: '1px solid #ccc', padding: 8 }}>
+                  <button onClick={() => openInvoiceDetails(inv)}>Ver detalhes</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
 
-      {artigos.length > 0 && (
-        <div style={{ marginTop: '20px' }}>
-          <h2>🛒 Lista de Artigos</h2>
-          <table
-            style={{
-              width: '100%',
-              borderCollapse: 'collapse',
-              marginTop: '10px',
-            }}
-          >
+      {/* Modal detalhes */}
+      {selectedInvoice && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 20,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: '#fff',
+            padding: 20,
+            boxShadow: '0 0 10px rgba(0,0,0,0.3)',
+            zIndex: 1000,
+            maxWidth: 600,
+            width: '90%',
+          }}
+        >
+          <h2>Detalhes da Fatura - {new Date(selectedInvoice.invoice_date).toLocaleDateString()}</h2>
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 10 }}>
             <thead>
-              <tr style={{ backgroundColor: '#f0f0f0' }}>
-                <th style={{ border: '1px solid #ccc', padding: '8px' }}>Artigo</th>
-                <th style={{ border: '1px solid #ccc', padding: '8px' }}>Quantidade</th>
-                <th style={{ border: '1px solid #ccc', padding: '8px' }}>Preço (€)</th>
+              <tr style={{ backgroundColor: '#eee' }}>
+                <th style={{ border: '1px solid #ccc', padding: 8 }}>Artigo</th>
+                <th style={{ border: '1px solid #ccc', padding: 8 }}>Quantidade</th>
+                <th style={{ border: '1px solid #ccc', padding: 8 }}>Preço (€)</th>
               </tr>
             </thead>
             <tbody>
-              {artigos.map((art, idx) => (
-                <tr key={idx}>
-                  <td style={{ border: '1px solid #ccc', padding: '8px' }}>{art.nome}</td>
-                  <td style={{ border: '1px solid #ccc', padding: '8px', textAlign: 'center' }}>
-                    {art.quantidade}
-                  </td>
-                  <td style={{ border: '1px solid #ccc', padding: '8px', textAlign: 'right' }}>
-                    {art.preco.toFixed(2)}
-                  </td>
+              {items.length === 0 && (
+                <tr>
+                  <td colSpan="3" style={{ textAlign: 'center', padding: 10 }}>Sem artigos para esta fatura.</td>
+                </tr>
+              )}
+              {items.map(item => (
+                <tr key={item.id}>
+                  <td style={{ border: '1px solid #ccc', padding: 8 }}>{item.nome}</td>
+                  <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'center' }}>{item.quantidade}</td>
+                  <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>{item.preco.toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-
-          <h3 style={{ marginTop: '20px' }}>
-            💰 <strong>Total da Fatura: {totalFatura.toFixed(2)} €</strong>
-          </h3>
+          <button style={{ marginTop: 20 }} onClick={closeInvoiceDetails}>Fechar</button>
         </div>
       )}
     </div>
