@@ -1,33 +1,62 @@
-import { useState } from 'react'
+import React, { useState } from 'react';
 
-export default function App() {
-  const [file, setFile] = useState(null)
+function App() {
+  const [artigos, setArtigos] = useState([]);
+  const [loading, setLoading] = useState(false);
 
-  async function handleUpload() {
-    if (!file) return alert('Escolhe um PDF primeiro.')
-    const base64 = await toBase64(file)
-    const response = await fetch('/api/process-invoice', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pdfBase64: base64.split(',')[1] })
-    })
-    const data = await response.json()
-    console.log(data)
-    alert(JSON.stringify(data, null, 2))
-  }
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
 
-  const toBase64 = file => new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.readAsDataURL(file)
-    reader.onload = () => resolve(reader.result)
-    reader.onerror = error => reject(error)
-  })
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result.split(',')[1];
+      setLoading(true);
+      try {
+        const response = await fetch('/api/process-invoice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pdfBase64: base64 })
+        });
+        const data = await response.json();
+        setArtigos(data.artigos || []);
+      } catch (err) {
+        console.error('Erro ao processar fatura:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   return (
     <div style={{ padding: 20 }}>
-      <h1>Upload Fatura Continente</h1>
-      <input type="file" accept="application/pdf" onChange={e => setFile(e.target.files[0])} />
-      <button onClick={handleUpload}>Enviar</button>
+      <h1>Faturas Continente</h1>
+      <input type="file" accept="application/pdf" onChange={handleFileUpload} />
+      {loading && <p>A processar…</p>}
+      {artigos.length > 0 && (
+        <div style={{ marginTop: 20 }}>
+          <h2>Artigos extraídos:</h2>
+          <table border="1" cellPadding="8" style={{ borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th>Nome</th>
+                <th>Preço (€)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {artigos.map((item, idx) => (
+                <tr key={idx}>
+                  <td>{item.nome}</td>
+                  <td>{item.preco.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
-  )
+  );
 }
+
+export default App;
