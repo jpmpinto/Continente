@@ -1,0 +1,11 @@
+{
+  "name": "continente-faturas-analyser",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "vercel-build": "echo 'No build step needed'"
+  },
+  "dependencies": {
+    "pdf-parse": "^1.1.1"
+  }
+}
