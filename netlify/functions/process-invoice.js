@@ -21,14 +21,28 @@ export const handler = async (event) => {
     }
 
     const dataBuffer = Buffer.from(pdfBase64, 'base64');
-
     const data = await pdf(dataBuffer);
+
+    const artigos = [];
+    const lines = data.text.split('\n');
+
+    lines.forEach(line => {
+      // Exemplo: procura linhas com "nome ... preço" (ex: "Arroz 2,50")
+      const match = line.match(/^(.+?)\s+(\d+,\d{2})$/);
+      if (match) {
+        artigos.push({
+          nome: match[1].trim(),
+          preco: parseFloat(match[2].replace(',', '.'))
+        });
+      }
+    });
 
     return {
       statusCode: 200,
-      body: JSON.stringify({ text: data.text }),
-      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ artigos }),
+      headers: { 'Content-Type': 'application/json' }
     };
+
   } catch (error) {
     console.error('Error parsing PDF:', error);
     return {
