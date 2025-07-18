@@ -1,10 +1,20 @@
+// netlify/functions/upload.js
 exports.handler = async (event, context) => {
-  // event.body tem o conteúdo enviado
-  // aqui fazes o mesmo processamento que tinhas no /api/upload
-  const responseJson = { message: "Upload processado com sucesso!" };
+  if (event.httpMethod !== 'POST') {
+    return { statusCode: 405, body: 'Method Not Allowed' };
+  }
+
+  // Se precisares de processar FormData, usa um parser apropriado aqui.
+  // Por agora, vou devolver apenas uma mensagem de teste:
+  const responseData = {
+    status: 'success',
+    message: 'Ficheiro recebido e processado com sucesso!',
+    // podes adicionar mais dados aqui conforme o teu processamento
+  };
 
   return {
     statusCode: 200,
-    body: JSON.stringify(responseJson),
+    body: JSON.stringify(responseData),
+    headers: { 'Content-Type': 'application/json' }
   };
 };
