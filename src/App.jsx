@@ -16,7 +16,7 @@ function App() {
       setLoading(true);
 
       try {
-        const response = await fetch('/process-invoice', {
+        const response = await fetch('/.netlify/functions/process-invoice', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ pdfBase64: base64 }),
