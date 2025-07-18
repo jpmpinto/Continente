@@ -29,22 +29,23 @@ export const handler = async (event) => {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      // Caso 1: nome + preço final na mesma linha
+      // 🧾 Caso 1: nome + preço final (ex: "CALVE MAIONESE TD 240G 1,49")
       const singleLineMatch = line.match(/^(?:\([A-Z]\))?(.+?)\s+(\d+[.,]\d{2})$/);
       if (singleLineMatch) {
         artigos.push({
           nome: singleLineMatch[1].trim(),
           preco: parseFloat(singleLineMatch[2].replace(',', '.')),
+          quantidade: 1
         });
         continue;
       }
 
-      // Caso 2: nome na linha atual e formato "QTD X PREÇO_UNIT PREÇO_TOTAL" na linha seguinte
+      // 🧾 Caso 2: nome numa linha e "QTD X PREÇO_UNIT PREÇO_TOTAL" na linha seguinte
       if (i + 1 < lines.length) {
         const nextLine = lines[i + 1];
 
         const multiLineMatch = nextLine.match(
-          /^(\d+(?:[.,]\d{1,3})?)\s*[xX]\s*(\d+[.,]\d{2})\s+(\d+[.,]\d{2})$/
+          /^(\d+(?:[.,]\d+)?)\s*[xX]\s*(\d+[.,]\d{2})\s*(\d+[.,]\d{2})$/
         );
 
         if (multiLineMatch) {
@@ -58,17 +59,15 @@ export const handler = async (event) => {
             quantidade: quantidade
           });
 
-          i++;
+          i++; // Saltar linha seguinte pois já foi usada
           continue;
         }
       }
     }
 
-    console.info('🛠 DEBUG - Todas as linhas relevantes:');
-    lines.forEach((l, idx) => console.info(`L${idx}: ${l}`));
     console.info(`✅ Total de artigos extraídos: ${artigos.length}`);
     artigos.forEach((a, idx) =>
-      console.info(`Artigo ${idx + 1}: ${a.nome} (qtd ${a.quantidade || 1}) -> €${a.preco}`)
+      console.info(`Artigo ${idx + 1}: ${a.nome} (qtd ${a.quantidade}) -> €${a.preco}`)
     );
 
     return {
