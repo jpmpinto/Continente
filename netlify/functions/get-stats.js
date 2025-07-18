@@ -1,5 +1,5 @@
-const SUPABASE_URL = 'https://TEU_PROJETO.supabase.co/rest/v1/';
-const SUPABASE_KEY = 'A_TUA_ANON_PUBLIC_KEY';
+const SUPABASE_URL = https://tmibztgvgnfjkkzaolgc.supabase.co/;
+const SUPABASE_KEY = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRtaWJ6dGd2Z25mamtremFvbGdjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI4NDk2MDcsImV4cCI6MjA2ODQyNTYwN30.oiNVXw8mn9ft4qpnih7bwoCTJyB_jEWUopXzMwJr8Oc;
 
 exports.handler = async () => {
   try {
