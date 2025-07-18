@@ -39,13 +39,12 @@ export const handler = async (event) => {
         continue;
       }
 
-      // Caso 2: nome numa linha e na seguinte quantidade X preço unitário preço total
+      // Caso 2: nome na linha atual e formato "QTD X PREÇO_UNIT PREÇO_TOTAL" na linha seguinte
       if (i + 1 < lines.length) {
         const nextLine = lines[i + 1];
 
-        // Aceita espaços flexíveis e vírgulas ou pontos
         const multiLineMatch = nextLine.match(
-          /^(\d+(?:[.,]\d{1,3})?)\s*X\s*(\d+[.,]\d{2})\s+(\d+[.,]\d{2})$/
+          /^(\d+(?:[.,]\d{1,3})?)\s*[xX]\s*(\d+[.,]\d{2})\s+(\d+[.,]\d{2})$/
         );
 
         if (multiLineMatch) {
@@ -53,22 +52,24 @@ export const handler = async (event) => {
           const precoUnit = parseFloat(multiLineMatch[2].replace(',', '.'));
           const precoTotal = parseFloat(multiLineMatch[3].replace(',', '.'));
 
-          // Preferir o preço total do PDF
           artigos.push({
             nome: line.replace(/^\([A-Z]\)/, '').trim(),
-            preco: precoTotal || (precoUnit * quantidade),
+            preco: precoTotal,
+            quantidade: quantidade
           });
 
-          i++; // saltar a linha seguinte porque já foi processada
+          i++;
           continue;
         }
       }
     }
 
+    console.info('🛠 DEBUG - Todas as linhas relevantes:');
+    lines.forEach((l, idx) => console.info(`L${idx}: ${l}`));
     console.info(`✅ Total de artigos extraídos: ${artigos.length}`);
-    artigos.forEach((a, idx) => {
-      console.info(`Artigo ${idx + 1}: ${a.nome} -> €${a.preco}`);
-    });
+    artigos.forEach((a, idx) =>
+      console.info(`Artigo ${idx + 1}: ${a.nome} (qtd ${a.quantidade || 1}) -> €${a.preco}`)
+    );
 
     return {
       statusCode: 200,
@@ -77,7 +78,7 @@ export const handler = async (event) => {
     };
 
   } catch (error) {
-    console.error('Error parsing PDF:', error);
+    console.error('❌ Erro no process-invoice:', error);
     return {
       statusCode: 500,
       body: JSON.stringify({ error: 'Failed to parse PDF', details: error.message }),
