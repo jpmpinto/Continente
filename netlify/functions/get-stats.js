@@ -1,23 +1,35 @@
-import { createClient } from '@supabase/supabase-js';
+const SUPABASE_URL = 'https://TEU_PROJETO.supabase.co/rest/v1/';
+const SUPABASE_KEY = 'A_TUA_ANON_PUBLIC_KEY';
 
-const supabaseUrl = 'AQUI_A_TUA_URL_DO_SUPABASE';
-const supabaseKey = 'AQUI_A_TUA_ANON_KEY';
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-export async function handler() {
+exports.handler = async () => {
   try {
-    // Total por mês
-    const { data: invoices } = await supabase.from('invoices').select('invoice_date,total');
+    // Buscar todas as faturas
+    const invRes = await fetch(`${SUPABASE_URL}invoices?select=invoice_date,total`, {
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`
+      }
+    });
+    const invoices = await invRes.json();
+    if (!invRes.ok) throw new Error(JSON.stringify(invoices));
 
-    // Agrupar por mês
+    // Agrupar total gasto por mês
     const monthlyTotals = {};
     invoices.forEach(inv => {
       const month = inv.invoice_date.slice(0, 7); // YYYY-MM
       monthlyTotals[month] = (monthlyTotals[month] || 0) + Number(inv.total);
     });
 
-    // Artigos mais comprados
-    const { data: items } = await supabase.from('invoice_items').select('nome, quantidade, preco');
+    // Buscar todos os artigos
+    const itemsRes = await fetch(`${SUPABASE_URL}invoice_items?select=nome,quantidade,preco`, {
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`
+      }
+    });
+    const items = await itemsRes.json();
+    if (!itemsRes.ok) throw new Error(JSON.stringify(items));
+
     const artigosMap = {};
     items.forEach(it => {
       if (!artigosMap[it.nome]) {
@@ -32,7 +44,10 @@ export async function handler() {
       body: JSON.stringify({ monthlyTotals, artigos: artigosMap })
     };
   } catch (err) {
-    console.error('Erro ao obter stats:', err);
-    return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
+    console.error('Erro ao buscar stats:', err);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: err.message })
+    };
   }
-}
+};
