@@ -6,8 +6,10 @@ export default function App() {
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [uploadLoading, setUploadLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  // Fetch invoices on mount
+  // Buscar faturas ao carregar
   useEffect(() => {
     fetchInvoices();
   }, []);
@@ -26,7 +28,6 @@ export default function App() {
     setLoading(false);
   }
 
-  // Fetch items for a selected invoice
   async function fetchInvoiceItems(invoiceId) {
     setLoading(true);
     const { data, error } = await supabase
@@ -52,10 +53,113 @@ export default function App() {
     setItems([]);
   }
 
+  // Apagar fatura com confirmação
+  async function deleteInvoice(id) {
+    if (!window.confirm('Tem a certeza que deseja apagar esta fatura? Esta ação não pode ser desfeita.')) {
+      return;
+    }
+    setLoading(true);
+    const { error } = await supabase
+      .from('invoices')
+      .delete()
+      .eq('id', id);
+    if (error) {
+      alert('Erro ao apagar fatura: ' + error.message);
+    } else {
+      alert('Fatura apagada com sucesso!');
+      fetchInvoices();
+      if (selectedInvoice?.id === id) {
+        closeInvoiceDetails();
+      }
+    }
+    setLoading(false);
+  }
+
+  // Upload e processamento PDF
+  const handleFileUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    setUploadLoading(true);
+    setError('');
+    
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64 = reader.result.split(',')[1];
+        const response = await fetch('/.netlify/functions/process-invoice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pdfBase64: base64 }),
+        });
+
+        if (!response.ok) {
+          setError('Erro na API ao processar fatura: ' + response.status);
+          setUploadLoading(false);
+          return;
+        }
+
+        const data = await response.json();
+
+        // Guardar no Supabase
+        const { artigos, totalFatura } = data;
+
+        // Insere fatura
+        const { data: insertedInvoice, error: invoiceError } = await supabase
+          .from('invoices')
+          .insert([{ invoice_date: new Date().toISOString().split('T')[0], total: totalFatura }])
+          .select()
+          .single();
+
+        if (invoiceError) {
+          setError('Erro ao guardar fatura: ' + invoiceError.message);
+          setUploadLoading(false);
+          return;
+        }
+
+        // Insere artigos
+        const itemsToInsert = artigos.map((art) => ({
+          invoice_id: insertedInvoice.id,
+          nome: art.nome,
+          quantidade: art.quantidade,
+          preco: art.preco,
+        }));
+
+        const { error: itemsError } = await supabase.from('invoice_items').insert(itemsToInsert);
+        if (itemsError) {
+          setError('Erro ao guardar artigos: ' + itemsError.message);
+          setUploadLoading(false);
+          return;
+        }
+
+        alert('Fatura guardada com sucesso!');
+        fetchInvoices();
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      setError('Erro ao ler ficheiro.');
+      console.error(err);
+    } finally {
+      setUploadLoading(false);
+    }
+  };
+
   return (
     <div style={{ padding: 20, fontFamily: 'Arial, sans-serif' }}>
-      <h1>📄 Lista de Faturas Guardadas</h1>
-      {loading && <p>Carregando...</p>}
+      <h1>📄 Gestão de Faturas Continente</h1>
+
+      {/* Upload PDF */}
+      <div style={{ marginBottom: 20 }}>
+        <label>
+          <strong>Carregar nova fatura (PDF): </strong>
+          <input type="file" accept="application/pdf" onChange={handleFileUpload} disabled={uploadLoading} />
+        </label>
+        {uploadLoading && <p>Processando fatura...</p>}
+        {error && <p style={{ color: 'red' }}>{error}</p>}
+      </div>
+
+      {/* Lista faturas */}
+      {loading && <p>Carregando faturas...</p>}
       {!loading && invoices.length === 0 && <p>Nenhuma fatura encontrada.</p>}
       {!loading && invoices.length > 0 && (
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -72,7 +176,12 @@ export default function App() {
                 <td style={{ border: '1px solid #ccc', padding: 8 }}>{new Date(inv.invoice_date).toLocaleDateString()}</td>
                 <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>{inv.total.toFixed(2)}</td>
                 <td style={{ border: '1px solid #ccc', padding: 8 }}>
-                  <button onClick={() => openInvoiceDetails(inv)}>Ver detalhes</button>
+                  <button onClick={() => openInvoiceDetails(inv)} style={{ marginRight: 10 }}>
+                    Ver detalhes
+                  </button>
+                  <button onClick={() => deleteInvoice(inv.id)} style={{ color: 'red' }}>
+                    Apagar
+                  </button>
                 </td>
               </tr>
             ))}
@@ -108,7 +217,9 @@ export default function App() {
             <tbody>
               {items.length === 0 && (
                 <tr>
-                  <td colSpan="3" style={{ textAlign: 'center', padding: 10 }}>Sem artigos para esta fatura.</td>
+                  <td colSpan="3" style={{ textAlign: 'center', padding: 10 }}>
+                    Sem artigos para esta fatura.
+                  </td>
                 </tr>
               )}
               {items.map(item => (
@@ -120,7 +231,9 @@ export default function App() {
               ))}
             </tbody>
           </table>
-          <button style={{ marginTop: 20 }} onClick={closeInvoiceDetails}>Fechar</button>
+          <button style={{ marginTop: 20 }} onClick={closeInvoiceDetails}>
+            Fechar
+          </button>
         </div>
       )}
     </div>
