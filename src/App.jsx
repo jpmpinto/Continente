@@ -13,7 +13,7 @@ function App() {
       const base64 = reader.result.split(',')[1];
       setLoading(true);
       try {
-        const response = await fetch('/api/process-invoice', {
+        const response = await fetch('/.netlify/functions/process-invoice', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ pdfBase64: base64 })
