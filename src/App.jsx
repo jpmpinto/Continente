@@ -1,81 +1,80 @@
-import React, { useState } from "react";
+import React, { useState } from 'react';
+import { supabase } from './supabaseClient';
 
 export default function App() {
-  const [artigos, setArtigos] = useState([]);
-  const [totalFatura, setTotalFatura] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  // ... o resto do código mantém-se igual ...
 
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
+  const saveInvoiceToSupabase = async (artigos, total) => {
+    try {
+      // 1. Inserir a fatura
+      const { data: invoice, error: invoiceError } = await supabase
+        .from('invoices')
+        .insert([{ total }])
+        .select()
+        .single();
+
+      if (invoiceError) throw invoiceError;
+
+      // 2. Inserir os artigos relacionados
+      const itemsToInsert = artigos.map((art) => ({
+        invoice_id: invoice.id,
+        nome: art.nome,
+        quantidade: art.quantidade,
+        preco: art.preco,
+      }));
+
+      const { error: itemsError } = await supabase.from('invoice_items').insert(itemsToInsert);
+      if (itemsError) throw itemsError;
+
+      alert('Fatura guardada com sucesso!');
+    } catch (error) {
+      console.error('Erro ao guardar no Supabase:', error);
+      alert('Erro ao guardar fatura. Ver consola.');
+    }
+  };
+
+  // Atualiza o handleFileUpload para chamar saveInvoiceToSupabase
+  const handleFileUpload = async (event) => {
+    const file = event.target.files[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64String = reader.result.split(",")[1];
-      setLoading(true);
-      setError("");
+    setLoading(true);
+    setError('');
+    setArtigos([]);
+    setTotalFatura(0);
 
-      try {
-        const response = await fetch("/.netlify/functions/process-invoice", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pdfBase64: base64String }),
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64 = reader.result.split(',')[1];
+
+        const response = await fetch('/.netlify/functions/process-invoice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pdfBase64: base64 }),
         });
 
         if (!response.ok) {
-          console.error("Status da resposta:", response.status);
           throw new Error(`Erro na API: ${response.status}`);
         }
 
         const data = await response.json();
+
         setArtigos(data.artigos || []);
         setTotalFatura(data.totalFatura || 0);
-      } catch (err) {
-        console.error("Erro ao processar fatura:", err);
-        setError("Não foi possível processar a fatura.");
-      } finally {
+
+        // Guardar na base de dados
+        await saveInvoiceToSupabase(data.artigos || [], data.totalFatura || 0);
+
         setLoading(false);
-      }
-    };
-    reader.readAsDataURL(file);
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error('Erro ao processar fatura:', err);
+      setError('Erro ao processar fatura. Ver consola para detalhes.');
+      setLoading(false);
+    }
   };
 
-  return (
-    <div className="p-6 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold mb-4">Leitor de Faturas</h1>
-      <input type="file" accept="application/pdf" onChange={handleFileUpload} className="mb-4" />
-
-      {loading && <p className="text-blue-500">A processar fatura...</p>}
-      {error && <p className="text-red-500">{error}</p>}
-
-      {artigos.length > 0 && (
-        <div className="mt-4">
-          <h2 className="text-xl font-semibold mb-2">Artigos extraídos:</h2>
-          <table className="w-full border">
-            <thead>
-              <tr className="bg-gray-100">
-                <th className="border px-2 py-1 text-left">Nome</th>
-                <th className="border px-2 py-1 text-right">Quantidade</th>
-                <th className="border px-2 py-1 text-right">Preço (€)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {artigos.map((art, idx) => (
-                <tr key={idx}>
-                  <td className="border px-2 py-1">{art.nome}</td>
-                  <td className="border px-2 py-1 text-right">{art.quantidade}</td>
-                  <td className="border px-2 py-1 text-right">{art.preco.toFixed(2)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <h2 className="text-lg font-bold mt-4">
-            Total gasto nesta fatura: €{totalFatura.toFixed(2)}
-          </h2>
-        </div>
-      )}
-    </div>
-  );
+  // ... JSX mantém-se igual ...
 }
