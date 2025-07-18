@@ -8,7 +8,7 @@ export default function App() {
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [artigosAgregados, setArtigosAgregados] = useState([]);
   const [sortBy, setSortBy] = useState('quantidade');
-  const [searchTerm, setSearchTerm] = useState(''); // 🔎 filtro pesquisa
+  const [searchTerm, setSearchTerm] = useState('');
   const [uploadLoading, setUploadLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -160,44 +160,15 @@ export default function App() {
   }
 
   async function handleFileUpload(event) {
-    const file = event.target.files[0];
-    if (!file) return;
+    const files = Array.from(event.target.files);
+    if (!files.length) return;
 
     setUploadLoading(true);
     try {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const base64 = reader.result.split(',')[1];
-        const response = await fetch('/.netlify/functions/process-invoice', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pdfBase64: base64 }),
-        });
-        if (!response.ok) throw new Error(`Erro na API: ${response.status}`);
-        const data = await response.json();
-        const { totalFatura, artigos } = data;
-
-        const { data: invoice, error: invoiceError } = await supabase
-          .from('invoices')
-          .insert([{ total: totalFatura, invoice_date: new Date(), user_id: user.id }])
-          .select()
-          .single();
-        if (invoiceError) throw invoiceError;
-
-        const artigosValidos = artigos.filter((a) => Number.isInteger(a.quantidade));
-        const itemsToInsert = artigosValidos.map((art) => ({
-          invoice_id: invoice.id,
-          nome: art.nome,
-          quantidade: art.quantidade,
-          preco: art.preco,
-        }));
-        const { error: itemsError } = await supabase.from('invoice_items').insert(itemsToInsert);
-        if (itemsError) throw itemsError;
-
-        fetchFaturas();
-        alert('Fatura guardada com sucesso!');
-      };
-      reader.readAsDataURL(file);
+      for (const file of files) {
+        await processSingleFile(file);
+      }
+      alert('Todas as faturas foram processadas!');
     } catch (err) {
       console.error('❌ Erro ao processar fatura:', err);
       setError('Erro ao processar fatura: ' + err.message);
@@ -206,7 +177,66 @@ export default function App() {
     }
   }
 
-  // 🔎 Aplicar filtro de pesquisa
+  async function processSingleFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64 = reader.result.split(',')[1];
+          const response = await fetch('/.netlify/functions/process-invoice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pdfBase64: base64 }),
+          });
+          if (!response.ok) throw new Error(`Erro na API: ${response.status}`);
+          const data = await response.json();
+          const { totalFatura, artigos } = data;
+
+          const { data: invoice, error: invoiceError } = await supabase
+            .from('invoices')
+            .insert([{ total: totalFatura, invoice_date: new Date(), user_id: user.id }])
+            .select()
+            .single();
+          if (invoiceError) throw invoiceError;
+
+          const artigosValidos = artigos.filter((a) => Number.isInteger(a.quantidade));
+          if (artigosValidos.length > 0) {
+            const itemsToInsert = artigosValidos.map((art) => ({
+              invoice_id: invoice.id,
+              nome: art.nome,
+              quantidade: art.quantidade,
+              preco: art.preco,
+            }));
+            const { error: itemsError } = await supabase.from('invoice_items').insert(itemsToInsert);
+            if (itemsError) throw itemsError;
+          }
+
+          fetchFaturas();
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function exportToCSV() {
+    const headers = ['Artigo', 'Qtd Total', 'Valor Total (€)'];
+    const rows = artigosAgregados.map((a) => [a.nome, a.quantidade, a.valor.toFixed(2)]);
+    const csvContent =
+      [headers, ...rows].map((row) => row.map((r) => `"${r}"`).join(',')).join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'artigos_agregados.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
   const artigosFiltrados = artigosAgregados.filter((a) =>
     a.nome.toLowerCase().includes(searchTerm.toLowerCase())
   );
@@ -238,9 +268,15 @@ export default function App() {
       <h1>Faturas do utilizador: {user.email}</h1>
       <button onClick={() => supabase.auth.signOut()}>Logout</button>
 
-      <h2>Carregar nova fatura</h2>
-      <input type="file" accept="application/pdf" onChange={handleFileUpload} disabled={uploadLoading} />
-      {uploadLoading && <p>A carregar fatura...</p>}
+      <h2>Carregar novas faturas</h2>
+      <input
+        type="file"
+        accept="application/pdf"
+        multiple
+        onChange={handleFileUpload}
+        disabled={uploadLoading}
+      />
+      {uploadLoading && <p>A carregar faturas...</p>}
       {error && <p style={{ color: 'red' }}>{error}</p>}
 
       <h2>Artigos agregados</h2>
@@ -257,6 +293,9 @@ export default function App() {
         </button>
         <button onClick={() => changeSort('valor')} disabled={sortBy === 'valor'}>
           Ordenar por Valor
+        </button>
+        <button style={{ marginLeft: 10 }} onClick={exportToCSV}>
+          Exportar CSV
         </button>
       </div>
       <table style={{ width: '100%', marginTop: 10, marginBottom: 30, borderCollapse: 'collapse' }}>
@@ -385,10 +424,7 @@ function EditableItemRow({ item, onSave, onDelete }) {
         ) : (
           <>
             <button onClick={() => setEditMode(true)}>Editar</button>
-            <button
-              style={{ marginLeft: 8 }}
-              onClick={() => onDelete(item.id)}
-            >
+            <button style={{ marginLeft: 8 }} onClick={() => onDelete(item.id)}>
               Apagar
             </button>
           </>
