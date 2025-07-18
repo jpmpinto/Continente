@@ -1,89 +1,81 @@
-import React, { useState } from 'react';
+import React, { useState } from "react";
 
-function App() {
+export default function App() {
   const [artigos, setArtigos] = useState([]);
+  const [totalFatura, setTotalFatura] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState("");
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    setError(null);
     const reader = new FileReader();
     reader.onload = async () => {
-      const base64 = reader.result.split(',')[1];
+      const base64String = reader.result.split(",")[1];
       setLoading(true);
+      setError("");
 
       try {
-        const response = await fetch('/.netlify/functions/process-invoice', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pdfBase64: base64 }),
+        const response = await fetch("/.netlify/functions/process-invoice", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pdfBase64: base64String }),
         });
 
-        console.log('Status da resposta:', response.status);
         if (!response.ok) {
-          const text = await response.text();
-          console.error('Resposta da API (não OK):', text);
+          console.error("Status da resposta:", response.status);
           throw new Error(`Erro na API: ${response.status}`);
         }
 
         const data = await response.json();
-
-        if (data.artigos && data.artigos.length > 0) {
-          setArtigos(data.artigos);
-        } else {
-          setArtigos([]);
-          setError('Nenhum artigo encontrado no PDF.');
-        }
+        setArtigos(data.artigos || []);
+        setTotalFatura(data.totalFatura || 0);
       } catch (err) {
-        console.error('Erro ao processar fatura:', err);
-        setError('Erro ao processar fatura. Verifica o console para mais detalhes.');
-        setArtigos([]);
+        console.error("Erro ao processar fatura:", err);
+        setError("Não foi possível processar a fatura.");
       } finally {
         setLoading(false);
       }
     };
-
     reader.readAsDataURL(file);
   };
 
   return (
-    <div style={{ padding: 20 }}>
-      <h1>Faturas Continente</h1>
+    <div className="p-6 max-w-4xl mx-auto">
+      <h1 className="text-2xl font-bold mb-4">Leitor de Faturas</h1>
+      <input type="file" accept="application/pdf" onChange={handleFileUpload} className="mb-4" />
 
-      <input type="file" accept="application/pdf" onChange={handleFileUpload} />
-
-      {loading && <p>A processar…</p>}
-
-      {error && <p style={{ color: 'red' }}>{error}</p>}
+      {loading && <p className="text-blue-500">A processar fatura...</p>}
+      {error && <p className="text-red-500">{error}</p>}
 
       {artigos.length > 0 && (
-        <div style={{ marginTop: 20 }}>
-          <h2>Artigos extraídos:</h2>
-          <table border="1" cellPadding="8" style={{ borderCollapse: 'collapse' }}>
+        <div className="mt-4">
+          <h2 className="text-xl font-semibold mb-2">Artigos extraídos:</h2>
+          <table className="w-full border">
             <thead>
-              <tr>
-                <th>Nome</th>
-                <th>Quantidade</th>
-                <th>Preço Unitário (€)</th>
+              <tr className="bg-gray-100">
+                <th className="border px-2 py-1 text-left">Nome</th>
+                <th className="border px-2 py-1 text-right">Quantidade</th>
+                <th className="border px-2 py-1 text-right">Preço (€)</th>
               </tr>
             </thead>
             <tbody>
-              {artigos.map((item, idx) => (
+              {artigos.map((art, idx) => (
                 <tr key={idx}>
-                  <td>{item.nome}</td>
-                  <td>{item.quantidade !== undefined ? item.quantidade : '-'}</td>
-                  <td>{item.preco ? item.preco.toFixed(2) : '-'}</td>
+                  <td className="border px-2 py-1">{art.nome}</td>
+                  <td className="border px-2 py-1 text-right">{art.quantidade}</td>
+                  <td className="border px-2 py-1 text-right">{art.preco.toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+
+          <h2 className="text-lg font-bold mt-4">
+            Total gasto nesta fatura: €{totalFatura.toFixed(2)}
+          </h2>
         </div>
       )}
     </div>
   );
 }
-
-export default App;
