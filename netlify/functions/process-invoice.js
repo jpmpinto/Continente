@@ -28,6 +28,7 @@ export const handler = async (event) => {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
+      // Caso 1: Linha com nome + preço final ex: "(C)CALVE MAIONESE TD 240G 1,49"
       const singleLineMatch = line.match(/^(?:\([A-Z]\))?(.+?)\s+(\d+[.,]\d{2})$/);
       if (singleLineMatch) {
         artigos.push({
@@ -37,9 +38,12 @@ export const handler = async (event) => {
         continue;
       }
 
+      // Caso 2: Linha nome e na próxima linha a quantidade e preços ex:
+      // "(A)ATUM POSTA OLEO VEGETAL CNT 85G"
+      // "8 X 0,93 7,44"
       if (i + 1 < lines.length) {
         const nextLine = lines[i + 1];
-        const multiLineMatch = nextLine.match(/^(\d+)\s+X\s+(\d+[.,]\d{2})(\d+[.,]\d{2})$/);
+        const multiLineMatch = nextLine.match(/^(\d+)\s+X\s+(\d+[.,]\d{2})\s+(\d+[.,]\d{2})$/);
         if (multiLineMatch) {
           const quantidade = parseInt(multiLineMatch[1], 10);
           const precoUnitario = parseFloat(multiLineMatch[2].replace(',', '.'));
@@ -47,7 +51,7 @@ export const handler = async (event) => {
             nome: line.trim(),
             preco: precoUnitario * quantidade,
           });
-          i++;
+          i++; // pula a linha seguinte pois já processamos
           continue;
         }
       }
@@ -58,6 +62,7 @@ export const handler = async (event) => {
       body: JSON.stringify({ artigos }),
       headers: { 'Content-Type': 'application/json' },
     };
+
   } catch (error) {
     console.error('Error parsing PDF:', error);
     return {
