@@ -3,231 +3,406 @@ import { supabase } from './supabaseClient';
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [email, setEmail] = useState('');
-  const [loadingAuth, setLoadingAuth] = useState(false);
-
-  const [artigos, setArtigos] = useState([]);
-  const [totalFatura, setTotalFatura] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
   const [faturas, setFaturas] = useState([]);
   const [loadingFaturas, setLoadingFaturas] = useState(false);
+  const [selectedInvoice, setSelectedInvoice] = useState(null); // fatura aberta
+  const [artigosAgregados, setArtigosAgregados] = useState([]);
+  const [sortBy, setSortBy] = useState('quantidade'); // 'quantidade' ou 'valor'
+  const [uploadLoading, setUploadLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  // Autenticação e monitorização de sessão
+  // 1. Autenticação: Observar user logado
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    const session = supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user ?? null);
+    });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
+      if (session?.user) fetchFaturas();
+      else {
+        setFaturas([]);
+        setSelectedInvoice(null);
+        setArtigosAgregados([]);
+      }
     });
-    return () => listener.subscription.unsubscribe();
-  }, []);
+    if (user) fetchFaturas();
 
-  // Carregar faturas do user
-  useEffect(() => {
-    if (!user) {
-      setFaturas([]);
-      return;
-    }
-    fetchFaturas();
+    return () => {
+      listener?.subscription.unsubscribe();
+    };
   }, [user]);
 
+  // 2. Buscar faturas do user logado
   async function fetchFaturas() {
     setLoadingFaturas(true);
-    const { data, error } = await supabase
-      .from('invoices')
-      .select('id, invoice_date, total')
-      .eq('user_id', user.id)
-      .order('invoice_date', { ascending: false });
-    if (error) {
-      console.error('Erro ao carregar faturas:', error);
-      setError('Erro ao carregar faturas');
-    } else {
+    setError('');
+    try {
+      // Supondo que tens user_id na tabela invoices para filtrar
+      const { data, error } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
       setFaturas(data);
-      setError('');
+      setSelectedInvoice(null);
+      setArtigosAgregados([]);
+
+      // Calcular artigos agregados (somatório de todas as faturas do user)
+      await fetchArtigosAgregados(data);
+    } catch (err) {
+      setError('Erro a carregar faturas: ' + err.message);
     }
     setLoadingFaturas(false);
   }
 
-  // Login com magic link
-  const handleLogin = async () => {
-    setLoadingAuth(true);
-    const { error } = await supabase.auth.signInWithOtp({ email });
-    if (error) alert('Erro no login: ' + error.message);
-    else alert('Email enviado para login!');
-    setLoadingAuth(false);
-  };
+  // 3. Buscar e agregar artigos de várias faturas
+  async function fetchArtigosAgregados(faturasList) {
+    if (!faturasList || faturasList.length === 0) {
+      setArtigosAgregados([]);
+      return;
+    }
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-  };
-
-  // Guardar fatura e artigos no supabase
-  const saveInvoiceToSupabase = async (artigos, total) => {
     try {
-      const { data: invoice, error: invoiceError } = await supabase
+      const invoiceIds = faturasList.map((f) => f.id);
+      const { data: itens, error } = await supabase
+        .from('invoice_items')
+        .select('nome, quantidade, preco')
+        .in('invoice_id', invoiceIds);
+
+      if (error) throw error;
+
+      // Agregar por nome: somar quantidade e valor
+      const agrupados = {};
+      itens.forEach(({ nome, quantidade, preco }) => {
+        if (!agrupados[nome]) {
+          agrupados[nome] = { nome, quantidade: 0, valor: 0 };
+        }
+        agrupados[nome].quantidade += quantidade;
+        agrupados[nome].valor += preco;
+      });
+
+      let result = Object.values(agrupados);
+
+      // Ordenar
+      if (sortBy === 'quantidade') {
+        result.sort((a, b) => b.quantidade - a.quantidade);
+      } else {
+        result.sort((a, b) => b.valor - a.valor);
+      }
+
+      setArtigosAgregados(result);
+    } catch (err) {
+      setError('Erro a carregar artigos agregados: ' + err.message);
+    }
+  }
+
+  // 4. Selecionar fatura para detalhes
+  async function openInvoice(id) {
+    setError('');
+    try {
+      const { data: invoice, error } = await supabase
         .from('invoices')
-        .insert([{ total, user_id: user.id, invoice_date: new Date().toISOString().slice(0, 10) }])
-        .select()
+        .select('*')
+        .eq('id', id)
         .single();
+      if (error) throw error;
 
-      if (invoiceError) throw invoiceError;
-
-      const itemsToInsert = artigos.map((art) => ({
-        invoice_id: invoice.id,
-        nome: art.nome,
-        quantidade: art.quantidade,
-        preco: art.preco,
-      }));
-
-      const { error: itemsError } = await supabase.from('invoice_items').insert(itemsToInsert);
+      const { data: items, error: itemsError } = await supabase
+        .from('invoice_items')
+        .select('*')
+        .eq('invoice_id', id);
       if (itemsError) throw itemsError;
 
-      alert('Fatura guardada com sucesso!');
-      fetchFaturas();
-    } catch (error) {
-      console.error('Erro ao guardar no Supabase:', error);
-      alert('Erro ao guardar fatura. Ver consola.');
+      setSelectedInvoice({ ...invoice, items });
+    } catch (err) {
+      setError('Erro a abrir fatura: ' + err.message);
     }
-  };
+  }
 
-  // Upload e processamento do PDF
-  const handleFileUpload = async (event) => {
+  // 5. Apagar fatura (com cascade apaga artigos)
+  async function deleteInvoice(id) {
+    if (!window.confirm('Tem a certeza que quer apagar esta fatura?')) return;
+    setError('');
+    try {
+      const { error } = await supabase.from('invoices').delete().eq('id', id);
+      if (error) throw error;
+      fetchFaturas();
+    } catch (err) {
+      setError('Erro ao apagar fatura: ' + err.message);
+    }
+  }
+
+  // 6. Editar artigos (exemplo simples, só quantidade e preço)
+  async function saveItemChanges(itemId, quantidade, preco) {
+    setError('');
+    try {
+      const { error } = await supabase
+        .from('invoice_items')
+        .update({ quantidade, preco })
+        .eq('id', itemId);
+      if (error) throw error;
+      openInvoice(selectedInvoice.id); // refrescar detalhes
+      fetchFaturas(); // refrescar listagem geral e agregados
+    } catch (err) {
+      setError('Erro ao guardar artigo: ' + err.message);
+    }
+  }
+
+  // 7. Carregar nova fatura (simplificado)
+  async function handleFileUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
 
-    setLoading(true);
+    setUploadLoading(true);
     setError('');
-    setArtigos([]);
-    setTotalFatura(0);
 
     try {
       const reader = new FileReader();
       reader.onload = async () => {
         const base64 = reader.result.split(',')[1];
 
-        try {
-          const response = await fetch('/.netlify/functions/process-invoice', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pdfBase64: base64 }),
-          });
+        // Enviar para função lambda (Netlify function)
+        const response = await fetch('/.netlify/functions/process-invoice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pdfBase64: base64 }),
+        });
 
-          if (!response.ok) {
-            throw new Error(`Erro na API: ${response.status}`);
-          }
+        if (!response.ok) throw new Error(`Erro na API: ${response.status}`);
 
-          const data = await response.json();
+        const data = await response.json();
 
-          setArtigos(data.artigos || []);
-          setTotalFatura(data.totalFatura || 0);
+        // Guardar fatura e artigos com user_id no supabase
+        const { totalFatura, artigos } = data;
 
-          await saveInvoiceToSupabase(data.artigos || [], data.totalFatura || 0);
-        } catch (err) {
-          console.error('Erro ao processar fatura:', err);
-          setError('Erro ao processar fatura. Ver consola para detalhes.');
-        } finally {
-          setLoading(false);
-        }
+        // Inserir fatura
+        const { data: invoice, error: invoiceError } = await supabase
+          .from('invoices')
+          .insert([{ total: totalFatura, invoice_date: new Date(), user_id: user.id }])
+          .select()
+          .single();
+
+        if (invoiceError) throw invoiceError;
+
+        // Inserir artigos (descartar artigos com quantidade não inteira)
+        const artigosValidos = artigos.filter(a => Number.isInteger(a.quantidade));
+
+        const itemsToInsert = artigosValidos.map((art) => ({
+          invoice_id: invoice.id,
+          nome: art.nome,
+          quantidade: art.quantidade,
+          preco: art.preco,
+        }));
+
+        const { error: itemsError } = await supabase.from('invoice_items').insert(itemsToInsert);
+        if (itemsError) throw itemsError;
+
+        await fetchFaturas();
+
+        alert('Fatura guardada com sucesso!');
       };
       reader.readAsDataURL(file);
     } catch (err) {
-      console.error('Erro ao ler ficheiro:', err);
-      setError('Erro ao ler ficheiro.');
-      setLoading(false);
+      setError('Erro ao processar fatura: ' + err.message);
+    } finally {
+      setUploadLoading(false);
     }
-  };
-
-  if (!user) {
-    return (
-      <div style={{ padding: 20 }}>
-        <h2>Login</h2>
-        <input
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          disabled={loadingAuth}
-        />
-        <button onClick={handleLogin} disabled={!email || loadingAuth}>
-          {loadingAuth ? 'A enviar...' : 'Enviar email para login'}
-        </button>
-        {error && <p style={{ color: 'red' }}>{error}</p>}
-      </div>
-    );
   }
 
-  return (
-    <div style={{ padding: 20, fontFamily: 'Arial, sans-serif' }}>
-      <h1>Olá, {user.email}</h1>
-      <button onClick={handleLogout} style={{ marginBottom: 20 }}>
-        Logout
-      </button>
+  // 8. Ordenar agregados (alterar sortBy)
+  function changeSort(by) {
+    setSortBy(by);
+    fetchArtigosAgregados(faturas);
+  }
 
-      <h2>📄 Carregar Fatura Continente</h2>
-      <input type="file" accept="application/pdf" onChange={handleFileUpload} disabled={loading} />
-      {loading && <p>A processar fatura...</p>}
+  if (!user)
+    return (
+      <div style={{ padding: 20 }}>
+        <h1>Login necessário</h1>
+        <button
+          onClick={async () => {
+            const email = prompt('Indica o teu email para receber o link mágico');
+            if (!email) return alert('Email obrigatório');
+            const { error } = await supabase.auth.signInWithOtp({
+              email,
+              options: {
+                emailRedirectTo: window.location.origin,
+              },
+            });
+            if (error) alert('Erro no login: ' + error.message);
+            else alert('Email enviado! Verifica o teu email.');
+          }}
+        >
+          Enviar email para login
+        </button>
+      </div>
+    );
+
+  return (
+    <div style={{ padding: 20, fontFamily: 'Arial, sans-serif', maxWidth: 900, margin: 'auto' }}>
+      <h1>Faturas do utilizador: {user.email}</h1>
+      <button onClick={() => supabase.auth.signOut()}>Logout</button>
+
+      <h2>Carregar nova fatura (PDF Continente)</h2>
+      <input type="file" accept="application/pdf" onChange={handleFileUpload} disabled={uploadLoading} />
+      {uploadLoading && <p>A carregar fatura...</p>}
+
       {error && <p style={{ color: 'red' }}>{error}</p>}
 
-      {artigos.length > 0 && (
-        <div style={{ marginTop: 20 }}>
-          <h3>Lista de Artigos da Última Fatura</h3>
-          <table
+      <h2>Artigos agregados (somatório em todas as faturas)</h2>
+      <div style={{ marginBottom: 10 }}>
+        Ordenar por:{' '}
+        <button disabled={sortBy === 'quantidade'} onClick={() => changeSort('quantidade')}>
+          Quantidade
+        </button>{' '}
+        <button disabled={sortBy === 'valor'} onClick={() => changeSort('valor')}>
+          Valor
+        </button>
+      </div>
+
+      <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 30 }}>
+        <thead>
+          <tr style={{ backgroundColor: '#eee' }}>
+            <th style={{ border: '1px solid #ccc', padding: 8 }}>Artigo</th>
+            <th style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>Quantidade Total</th>
+            <th style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>Valor Total (€)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {artigosAgregados.length === 0 && (
+            <tr>
+              <td colSpan={3} style={{ textAlign: 'center', padding: 20 }}>
+                Sem artigos encontrados
+              </td>
+            </tr>
+          )}
+          {artigosAgregados.map(({ nome, quantidade, valor }) => (
+            <tr key={nome}>
+              <td style={{ border: '1px solid #ccc', padding: 8 }}>{nome}</td>
+              <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>{quantidade}</td>
+              <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>{valor.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <h2>Faturas</h2>
+      {loadingFaturas && <p>A carregar faturas...</p>}
+      {faturas.length === 0 && !loadingFaturas && <p>Sem faturas guardadas.</p>}
+
+      <ul style={{ listStyle: 'none', paddingLeft: 0 }}>
+        {faturas.map((f) => (
+          <li
+            key={f.id}
             style={{
-              width: '100%',
-              borderCollapse: 'collapse',
-              marginTop: 10,
+              marginBottom: 10,
+              padding: 10,
+              border: '1px solid #ccc',
+              backgroundColor: selectedInvoice?.id === f.id ? '#def' : '#fff',
+              cursor: 'pointer',
             }}
+            onClick={() => openInvoice(f.id)}
           >
+            <strong>Fatura de {new Date(f.invoice_date).toLocaleDateString()}</strong> - Total: {f.total.toFixed(2)} €
+            <button
+              style={{ marginLeft: 15 }}
+              onClick={(e) => {
+                e.stopPropagation();
+                deleteInvoice(f.id);
+              }}
+            >
+              Apagar
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      {selectedInvoice && (
+        <div style={{ marginTop: 30, padding: 10, border: '1px solid #666', backgroundColor: '#f9f9f9' }}>
+          <h3>Detalhes da Fatura - {new Date(selectedInvoice.invoice_date).toLocaleDateString()}</h3>
+
+          {selectedInvoice.items.length === 0 && <p>Sem artigos nesta fatura.</p>}
+
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ backgroundColor: '#f0f0f0' }}>
+              <tr style={{ backgroundColor: '#eee' }}>
                 <th style={{ border: '1px solid #ccc', padding: 8 }}>Artigo</th>
-                <th style={{ border: '1px solid #ccc', padding: 8 }}>Quantidade</th>
+                <th style={{ border: '1px solid #ccc', padding: 8, textAlign: 'center' }}>Quantidade</th>
                 <th style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>Preço (€)</th>
+                <th style={{ border: '1px solid #ccc', padding: 8, textAlign: 'center' }}>Editar</th>
               </tr>
             </thead>
             <tbody>
-              {artigos.map((art, idx) => (
-                <tr key={idx}>
-                  <td style={{ border: '1px solid #ccc', padding: 8 }}>{art.nome}</td>
-                  <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'center' }}>{art.quantidade}</td>
-                  <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>{art.preco.toFixed(2)}</td>
-                </tr>
+              {selectedInvoice.items.map((item) => (
+                <EditableItemRow key={item.id} item={item} onSave={saveItemChanges} />
               ))}
             </tbody>
           </table>
-
-          <h3 style={{ marginTop: 20 }}>
-            💰 <strong>Total da Fatura: {totalFatura.toFixed(2)} €</strong>
-          </h3>
         </div>
       )}
-
-      <hr style={{ margin: '40px 0' }} />
-
-      <h2>Faturas Guardadas</h2>
-      {loadingFaturas && <p>A carregar faturas...</p>}
-      {faturas.length === 0 && !loadingFaturas && <p>Não existem faturas guardadas.</p>}
-      {faturas.length > 0 && (
-        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 10 }}>
-          <thead>
-            <tr style={{ backgroundColor: '#f0f0f0' }}>
-              <th style={{ border: '1px solid #ccc', padding: 8 }}>ID</th>
-              <th style={{ border: '1px solid #ccc', padding: 8 }}>Data</th>
-              <th style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>Total (€)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {faturas.map((fat) => (
-              <tr key={fat.id}>
-                <td style={{ border: '1px solid #ccc', padding: 8, fontSize: 12 }}>{fat.id}</td>
-                <td style={{ border: '1px solid #ccc', padding: 8 }}>{fat.invoice_date}</td>
-                <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>{parseFloat(fat.total).toFixed(2)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
     </div>
+  );
+}
+
+// Componente para linha de artigo editável
+function EditableItemRow({ item, onSave }) {
+  const [editMode, setEditMode] = useState(false);
+  const [quantidade, setQuantidade] = useState(item.quantidade);
+  const [preco, setPreco] = useState(item.preco);
+
+  return (
+    <tr>
+      <td style={{ border: '1px solid #ccc', padding: 8 }}>{item.nome}</td>
+      <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'center' }}>
+        {editMode ? (
+          <input
+            type="number"
+            min="1"
+            value={quantidade}
+            onChange={(e) => setQuantidade(parseInt(e.target.value))}
+            style={{ width: 60 }}
+          />
+        ) : (
+          quantidade
+        )}
+      </td>
+      <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'right' }}>
+        {editMode ? (
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={preco}
+            onChange={(e) => setPreco(parseFloat(e.target.value))}
+            style={{ width: 80 }}
+          />
+        ) : (
+          preco.toFixed(2)
+        )}
+      </td>
+      <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'center' }}>
+        {editMode ? (
+          <>
+            <button
+              onClick={() => {
+                if (quantidade > 0 && preco >= 0) {
+                  onSave(item.id, quantidade, preco);
+                  setEditMode(false);
+                } else {
+                  alert('Valores inválidos.');
+                }
+              }}
+            >
+              Guardar
+            </button>{' '}
+            <button onClick={() => setEditMode(false)}>Cancelar</button>
+          </>
+        ) : (
+          <button onClick={() => setEditMode(true)}>Editar</button>
+        )}
+      </td>
+    </tr>
   );
 }
