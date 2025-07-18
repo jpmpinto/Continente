@@ -5,22 +5,21 @@ function App() {
   const [quantidades, setQuantidades] = useState({});
   const [loading, setLoading] = useState(false);
 
-  // Atualizar quantidade no estado
+  // Atualiza a quantidade de cada artigo
   const updateQuantidade = (idx, value) => {
     setQuantidades(prev => ({
       ...prev,
-      [idx]: Number(value) || 1,
+      [idx]: Number(value) > 0 ? Number(value) : 1,
     }));
   };
 
-  // Carregar dados do mês atual do localStorage ao montar componente
+  // Carregar dados guardados do mês atual
   useEffect(() => {
-    const monthKey = new Date().toISOString().slice(0,7); // ex: "2025-07"
+    const monthKey = new Date().toISOString().slice(0,7); // "YYYY-MM"
     const saved = localStorage.getItem(monthKey);
     if (saved) {
       const savedArtigos = JSON.parse(saved);
       setArtigos(savedArtigos);
-      // Cria o objeto quantidades com base nos artigos guardados
       const qts = {};
       savedArtigos.forEach((item, idx) => {
         qts[idx] = item.quantidade || 1;
@@ -29,34 +28,33 @@ function App() {
     }
   }, []);
 
-  // Guardar artigos e quantidades no localStorage sempre que mudarem
+  // Guardar artigos e quantidades no localStorage sempre que mudam
   useEffect(() => {
     if (artigos.length === 0) return;
     const monthKey = new Date().toISOString().slice(0,7);
-    const dataToSave = artigos.map((item, idx) => ({
+    const toSave = artigos.map((item, idx) => ({
       ...item,
       quantidade: quantidades[idx] || 1,
     }));
-    localStorage.setItem(monthKey, JSON.stringify(dataToSave));
+    localStorage.setItem(monthKey, JSON.stringify(toSave));
   }, [artigos, quantidades]);
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = async () => {
       const base64 = reader.result.split(',')[1];
       setLoading(true);
       try {
-        const response = await fetch('/.netlify/functions/process-invoice', {
+        const res = await fetch('/.netlify/functions/process-invoice', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pdfBase64: base64 })
+          body: JSON.stringify({ pdfBase64: base64 }),
         });
-        const data = await response.json();
+        const data = await res.json();
         setArtigos(data.artigos || []);
-        setQuantidades({});  // reset quantidades ao carregar novos artigos
+        setQuantidades({}); // reset quantidades
       } catch (err) {
         console.error('Erro ao processar fatura:', err);
       } finally {
@@ -66,7 +64,6 @@ function App() {
     reader.readAsDataURL(file);
   };
 
-  // Calcular total gasto do mês
   const totalMes = artigos.reduce((acc, item, idx) => {
     const qtd = quantidades[idx] || 1;
     return acc + item.preco * qtd;
@@ -79,7 +76,7 @@ function App() {
       {loading && <p>A processar…</p>}
       {artigos.length > 0 && (
         <>
-          <h2>Artigos extraídos:</h2>
+          <h2>Artigos extraídos</h2>
           <table border="1" cellPadding="8" style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr>
@@ -100,6 +97,7 @@ function App() {
                       min="1"
                       value={quantidades[idx] || 1}
                       onChange={(e) => updateQuantidade(idx, e.target.value)}
+                      style={{ width: 60 }}
                     />
                   </td>
                   <td>{((quantidades[idx] || 1) * item.preco).toFixed(2)}</td>
@@ -115,3 +113,4 @@ function App() {
 }
 
 export default App;
+
