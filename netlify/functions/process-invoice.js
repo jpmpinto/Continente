@@ -1,66 +1,72 @@
 import pdf from 'pdf-parse';
 
 export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
   try {
-    if (req.method !== 'POST') {
-      return res.status(405).json({ error: 'Method not allowed' });
-    }
-
-    console.log('📥 Body recebido:', req.body?.pdfBase64 ? 'PDF recebido' : 'Nada recebido');
-
     const { pdfBase64 } = req.body;
     if (!pdfBase64) {
-      console.log('❌ Falta pdfBase64');
       return res.status(400).json({ error: 'Missing pdfBase64 in body' });
     }
 
     const dataBuffer = Buffer.from(pdfBase64, 'base64');
     const data = await pdf(dataBuffer);
-    let text = data.text;
 
-    // limpeza
-    text = text.replace(/\r/g, ' ').replace(/\u2028/g, ' ').replace(/\u00A0/g, ' ');
+    const lines = data.text.split('\n').map(l => l.trim()).filter(Boolean);
 
-    console.log('📝 Texto extraído (primeiros 500 chars):', text.slice(0, 500));
-
-    const dateMatch = text.match(/\d{2}\/\d{2}\/\d{4}/);
+    // Extrair data e total (tentativa)
+    const dateMatch = data.text.match(/\d{2}\/\d{2}\/\d{4}/);
     const invoiceDate = dateMatch ? dateMatch[0] : '';
 
-    const totalMatch = text.match(/TOTAL A PAGAR\s*([\d,.]+)/i);
+    const totalMatch = data.text.match(/TOTAL A PAGAR\s*([\d,.]+)/i);
     const total = totalMatch ? parseFloat(totalMatch[1].replace(',', '.')) : 0;
 
-    // juntar linhas
-    const linhas = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    const linhasJuntas = [];
-    for (let i = 0; i < linhas.length; i++) {
-      const linha = linhas[i];
-      const prox = linhas[i + 1] || '';
-      if (/^\(?[A-Z]/.test(linha) && /^[\d,.]+\s*X\s*[\d,.]+/.test(prox)) {
-        linhasJuntas.push(linha + ' ' + prox);
-        i++;
-      } else {
-        linhasJuntas.push(linha);
-      }
-    }
-
-    const artigoRegex = /([A-Z0-9ÇÉÊÂÓÚÍÀÜºª\s\.\-\/]+?)\s+([\d,.]+)\s*X\s*([\d,.]+)\s+([\d,.]+)/g;
     const artigos = [];
-    let match;
-    for (const linha of linhasJuntas) {
-      while ((match = artigoRegex.exec(linha)) !== null) {
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // Caso 1: linha com nome + preço final ex: "(C)CALVE MAIONESE TD 240G 1,49"
+      const singleLineMatch = line.match(/^(?:\([A-Z]\))?(.+?)\s+(\d+[.,]\d{2})$/);
+      if (singleLineMatch) {
         artigos.push({
-          nome: match[1].trim().replace(/\s+/g, ' '),
-          quantidade: parseFloat(match[2].replace(',', '.')),
-          preco: parseFloat(match[3].replace(',', '.'))
+          nome: singleLineMatch[1].trim(),
+          quantidade: 1,
+          preco: parseFloat(singleLineMatch[2].replace(',', '.')),
         });
+        continue;
+      }
+
+      // Caso 2: linha nome e próxima linha quantidade X preço unitário + total ex:
+      // "(A)ATUM POSTA OLEO VEGETAL CNT 85G"
+      // "8 X 0,93 7,44"
+      if (i + 1 < lines.length) {
+        const nextLine = lines[i + 1];
+        const multiLineMatch = nextLine.match(/^([\d,.]+)\s*X\s*([\d,.]+)\s*([\d,.]+)$/);
+        if (multiLineMatch) {
+          const quantidade = parseFloat(multiLineMatch[1].replace(',', '.'));
+          const precoUnitario = parseFloat(multiLineMatch[2].replace(',', '.'));
+          artigos.push({
+            nome: line.trim(),
+            quantidade,
+            preco: precoUnitario,
+          });
+          i++; // pula a próxima linha pois já foi processada
+          continue;
+        }
       }
     }
 
-    console.log('✅ Artigos encontrados:', artigos);
+    return res.status(200).json({
+      invoiceDate,
+      total,
+      artigos,
+    });
 
-    return res.status(200).json({ invoiceDate, total, artigos });
   } catch (error) {
-    console.error('🔥 Erro no process-invoice:', error);
-    return res.status(500).json({ error: 'Failed to process PDF', details: error.message });
+    console.error('Erro no parser PDF:', error);
+    return res.status(500).json({ error: 'Failed to parse PDF', details: error.message });
   }
 }
