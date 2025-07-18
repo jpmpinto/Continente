@@ -1,8 +1,44 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 function App() {
   const [artigos, setArtigos] = useState([]);
+  const [quantidades, setQuantidades] = useState({});
   const [loading, setLoading] = useState(false);
+
+  // Atualizar quantidade no estado
+  const updateQuantidade = (idx, value) => {
+    setQuantidades(prev => ({
+      ...prev,
+      [idx]: Number(value) || 1,
+    }));
+  };
+
+  // Carregar dados do mês atual do localStorage ao montar componente
+  useEffect(() => {
+    const monthKey = new Date().toISOString().slice(0,7); // ex: "2025-07"
+    const saved = localStorage.getItem(monthKey);
+    if (saved) {
+      const savedArtigos = JSON.parse(saved);
+      setArtigos(savedArtigos);
+      // Cria o objeto quantidades com base nos artigos guardados
+      const qts = {};
+      savedArtigos.forEach((item, idx) => {
+        qts[idx] = item.quantidade || 1;
+      });
+      setQuantidades(qts);
+    }
+  }, []);
+
+  // Guardar artigos e quantidades no localStorage sempre que mudarem
+  useEffect(() => {
+    if (artigos.length === 0) return;
+    const monthKey = new Date().toISOString().slice(0,7);
+    const dataToSave = artigos.map((item, idx) => ({
+      ...item,
+      quantidade: quantidades[idx] || 1,
+    }));
+    localStorage.setItem(monthKey, JSON.stringify(dataToSave));
+  }, [artigos, quantidades]);
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
@@ -20,6 +56,7 @@ function App() {
         });
         const data = await response.json();
         setArtigos(data.artigos || []);
+        setQuantidades({});  // reset quantidades ao carregar novos artigos
       } catch (err) {
         console.error('Erro ao processar fatura:', err);
       } finally {
@@ -29,19 +66,27 @@ function App() {
     reader.readAsDataURL(file);
   };
 
+  // Calcular total gasto do mês
+  const totalMes = artigos.reduce((acc, item, idx) => {
+    const qtd = quantidades[idx] || 1;
+    return acc + item.preco * qtd;
+  }, 0);
+
   return (
     <div style={{ padding: 20 }}>
       <h1>Faturas Continente</h1>
       <input type="file" accept="application/pdf" onChange={handleFileUpload} />
       {loading && <p>A processar…</p>}
       {artigos.length > 0 && (
-        <div style={{ marginTop: 20 }}>
+        <>
           <h2>Artigos extraídos:</h2>
           <table border="1" cellPadding="8" style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr>
                 <th>Nome</th>
                 <th>Preço (€)</th>
+                <th>Quantidade</th>
+                <th>Total (€)</th>
               </tr>
             </thead>
             <tbody>
@@ -49,11 +94,21 @@ function App() {
                 <tr key={idx}>
                   <td>{item.nome}</td>
                   <td>{item.preco.toFixed(2)}</td>
+                  <td>
+                    <input
+                      type="number"
+                      min="1"
+                      value={quantidades[idx] || 1}
+                      onChange={(e) => updateQuantidade(idx, e.target.value)}
+                    />
+                  </td>
+                  <td>{((quantidades[idx] || 1) * item.preco).toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
+          <h3>Total gasto no mês: € {totalMes.toFixed(2)}</h3>
+        </>
       )}
     </div>
   );
