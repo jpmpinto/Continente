@@ -1,43 +1,10 @@
 import React, { useState } from 'react';
-import { supabase } from './supabaseClient';
 
 export default function App() {
   const [artigos, setArtigos] = useState([]);
   const [totalFatura, setTotalFatura] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [invoiceDate, setInvoiceDate] = useState('');
-
-  // Função para gravar no Supabase
-  const saveInvoiceToSupabase = async (artigos, total) => {
-    try {
-      // Usa a data atual (ou podes pedir ao utilizador)
-      const today = new Date().toISOString().split('T')[0];
-
-      const { data: invoice, error: invoiceError } = await supabase
-        .from('invoices')
-        .insert([{ invoice_date: today, total }])
-        .select()
-        .single();
-
-      if (invoiceError) throw invoiceError;
-
-      const itemsToInsert = artigos.map((art) => ({
-        invoice_id: invoice.id,
-        nome: art.nome,
-        preco: art.preco,
-        quantidade: art.quantidade || 1,
-      }));
-
-      const { error: itemsError } = await supabase.from('invoice_items').insert(itemsToInsert);
-      if (itemsError) throw itemsError;
-
-      alert('✅ Fatura guardada com sucesso no Supabase!');
-    } catch (err) {
-      console.error('Erro ao guardar no Supabase:', err);
-      alert('❌ Erro ao guardar fatura. Ver consola.');
-    }
-  };
 
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
@@ -49,6 +16,7 @@ export default function App() {
     setTotalFatura(0);
 
     try {
+      // Ler PDF como base64
       const reader = new FileReader();
       reader.onload = async () => {
         const base64 = reader.result.split(',')[1];
@@ -61,6 +29,7 @@ export default function App() {
           });
 
           if (!response.ok) {
+            console.error('Resposta da API (não OK):', response.status);
             throw new Error(`Erro na API: ${response.status}`);
           }
 
@@ -69,13 +38,9 @@ export default function App() {
 
           setArtigos(data.artigos || []);
           setTotalFatura(data.totalFatura || 0);
-
-          // Guarda na base de dados
-          await saveInvoiceToSupabase(data.artigos || [], data.totalFatura || 0);
-
         } catch (err) {
           console.error('Erro ao processar fatura:', err);
-          setError('Erro ao processar fatura. Ver consola.');
+          setError('Erro ao processar fatura. Ver consola para detalhes.');
         } finally {
           setLoading(false);
         }
@@ -117,7 +82,7 @@ export default function App() {
                 <tr key={idx}>
                   <td style={{ border: '1px solid #ccc', padding: '8px' }}>{art.nome}</td>
                   <td style={{ border: '1px solid #ccc', padding: '8px', textAlign: 'center' }}>
-                    {art.quantidade || 1}
+                    {art.quantidade}
                   </td>
                   <td style={{ border: '1px solid #ccc', padding: '8px', textAlign: 'right' }}>
                     {art.preco.toFixed(2)}
@@ -128,4 +93,10 @@ export default function App() {
           </table>
 
           <h3 style={{ marginTop: '20px' }}>
-            💰 <strong>Total da Fatura: {totalFatura.
+            💰 <strong>Total da Fatura: {totalFatura.toFixed(2)} €</strong>
+          </h3>
+        </div>
+      )}
+    </div>
+  );
+}
