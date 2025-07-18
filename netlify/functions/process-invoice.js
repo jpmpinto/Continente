@@ -25,59 +25,47 @@ export const handler = async (event) => {
     const lines = data.text.split('\n').map(l => l.trim()).filter(Boolean);
 
     const artigos = [];
-
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      // 🧾 Caso 1: nome + preço final (ex: "CALVE MAIONESE TD 240G 1,49")
+      // Caso 1: nome e preço na mesma linha
       const singleLineMatch = line.match(/^(?:\([A-Z]\))?(.+?)\s+(\d+[.,]\d{2})$/);
       if (singleLineMatch) {
         artigos.push({
           nome: singleLineMatch[1].trim(),
+          quantidade: 1,
           preco: parseFloat(singleLineMatch[2].replace(',', '.')),
-          quantidade: 1
         });
         continue;
       }
 
-      // 🧾 Caso 2: nome numa linha e "QTD X PREÇO_UNIT PREÇO_TOTAL" na linha seguinte
+      // Caso 2: nome na linha atual e quantidade/preço na linha seguinte
       if (i + 1 < lines.length) {
         const nextLine = lines[i + 1];
-
-        const multiLineMatch = nextLine.match(
-          /^(\d+(?:[.,]\d+)?)\s*[xX]\s*(\d+[.,]\d{2})\s*(\d+[.,]\d{2})$/
-        );
-
+        const multiLineMatch = nextLine.match(/^([\d.,]+)\s+X\s+(\d+[.,]\d{2})\s+(\d+[.,]\d{2})$/);
         if (multiLineMatch) {
           const quantidade = parseFloat(multiLineMatch[1].replace(',', '.'));
-          const precoUnit = parseFloat(multiLineMatch[2].replace(',', '.'));
-          const precoTotal = parseFloat(multiLineMatch[3].replace(',', '.'));
-
+          const precoUnitario = parseFloat(multiLineMatch[2].replace(',', '.'));
           artigos.push({
-            nome: line.replace(/^\([A-Z]\)/, '').trim(),
-            preco: precoTotal,
-            quantidade: quantidade
+            nome: line.trim().replace(/^\([A-Z]\)/, '').trim(),
+            quantidade: quantidade,
+            preco: parseFloat((quantidade * precoUnitario).toFixed(2)),
           });
-
-          i++; // Saltar linha seguinte pois já foi usada
+          i++;
           continue;
         }
       }
     }
 
-    console.info(`✅ Total de artigos extraídos: ${artigos.length}`);
-    artigos.forEach((a, idx) =>
-      console.info(`Artigo ${idx + 1}: ${a.nome} (qtd ${a.quantidade}) -> €${a.preco}`)
-    );
+    const totalFatura = artigos.reduce((acc, art) => acc + art.preco, 0);
 
     return {
       statusCode: 200,
-      body: JSON.stringify({ artigos }),
+      body: JSON.stringify({ artigos, totalFatura }),
       headers: { 'Content-Type': 'application/json' },
     };
-
   } catch (error) {
-    console.error('❌ Erro no process-invoice:', error);
+    console.error('Error parsing PDF:', error);
     return {
       statusCode: 500,
       body: JSON.stringify({ error: 'Failed to parse PDF', details: error.message }),
