@@ -1,16 +1,146 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
+import Papa from 'papaparse';
 
 // 🔎 Função para normalizar nomes semelhantes
 function normalizarNome(nomeOriginal) {
   const n = nomeOriginal.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-
   if (n.includes('ATUM') && n.includes('OLEO') && n.includes('85')) {
     return 'ATUM OLEO 85G CONTINENTE';
   }
-  // Adiciona outras regras se quiseres
-
   return nomeOriginal;
+}
+
+/** =========================
+ *  Importação por CSV
+ *  Lê CSV no browser, agrupa por fatura, grava invoices + invoice_items no Supabase
+ *  Colunas aceites:
+ *   - fatura (opcional), data (YYYY-MM-DD), nome, quantidade, preco
+ *   - aliases: invoice|invoice_id, date|invoiceDate, descricao|description, qty|qtd|quantidade_itens, preco_unitario|price|unit_price
+ * ========================= */
+function CSVImport({ user, onDone }) {
+  const [rows, setRows] = useState([]);
+  const [status, setStatus] = useState(null);
+
+  const parseNumber = (v) => {
+    if (v === null || v === undefined || v === '') return 0;
+    const s = String(v).replace('.', '').replace(',', '.'); // aceita vírgulas
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setStatus(null);
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (res) => {
+        const data = res.data
+          .map((r) => ({
+            fatura: r.fatura || r.invoice || r.invoice_id || '',
+            data: r.data || r.date || r.invoiceDate || '',
+            nome: r.nome || r.descricao || r.description || '',
+            quantidade: parseInt(r.quantidade ?? r.qty ?? r.qtd ?? r.quantidade_itens ?? 1, 10) || 1,
+            preco: parseNumber(r.preco ?? r.preco_unitario ?? r.price ?? r.unit_price ?? 0),
+          }))
+          .filter((r) => r.nome);
+        setRows(data);
+      },
+    });
+  };
+
+  const groupByInvoice = (arr) => {
+    const m = new Map();
+    for (const r of arr) {
+      const key = r.fatura || r.data || 'UNICA';
+      if (!m.has(key)) m.set(key, []);
+      m.get(key).push(r);
+    }
+    return m;
+  };
+
+  const upload = async () => {
+    if (!user) {
+      setStatus({ ok: 0, fail: 1, errors: ['Sem utilizador autenticado'] });
+      return;
+    }
+    if (!rows.length) return;
+
+    setStatus('a_enviar');
+    const groups = groupByInvoice(rows);
+    let ok = 0,
+      fail = 0;
+    const errors = [];
+
+    for (const [key, items] of groups.entries()) {
+      const invoice_date = items[0].data || new Date().toISOString().slice(0, 10);
+      const artigos = items.map((it) => ({
+        nome: it.nome,
+        quantidade: Number.isInteger(it.quantidade) ? it.quantidade : 1,
+        preco: +it.preco || 0,
+      }));
+      const total = artigos.reduce((s, a) => s + a.quantidade * a.preco, 0);
+
+      try {
+        const { data: invoice, error: invErr } = await supabase
+          .from('invoices')
+          .insert([{ total, invoice_date, user_id: user.id }])
+          .select()
+          .single();
+        if (invErr) throw invErr;
+
+        const valid = artigos.filter((a) => Number.isInteger(a.quantidade));
+        if (valid.length) {
+          const toInsert = valid.map((a) => ({
+            invoice_id: invoice.id,
+            nome: a.nome,
+            quantidade: a.quantidade,
+            preco: a.preco,
+          }));
+          const { error: itemsErr } = await supabase.from('invoice_items').insert(toInsert);
+          if (itemsErr) throw itemsErr;
+        }
+        ok++;
+      } catch (e) {
+        fail++;
+        errors.push(`Fatura ${key}: ${e.message}`);
+      }
+    }
+
+    setStatus({ ok, fail, errors });
+    if (onDone) onDone();
+  };
+
+  return (
+    <div style={{ border: '1px solid #ddd', padding: 16, borderRadius: 8 }}>
+      <h3>Importação de Faturas por CSV</h3>
+      <p>
+        Formato: <code>fatura</code> (opcional), <code>data</code>, <code>nome</code>, <code>quantidade</code>,{' '}
+        <code>preco</code>. Aceita cabeçalhos alternativos.
+      </p>
+      <input type="file" accept=".csv" onChange={handleFile} />
+      {rows.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div>{rows.length} linhas lidas.</div>
+          <button onClick={upload}>Enviar para Supabase</button>
+        </div>
+      )}
+      {status === 'a_enviar' && <div style={{ marginTop: 8 }}>A enviar…</div>}
+      {status && status.ok !== undefined && (
+        <div style={{ marginTop: 8 }}>
+          <div>Importadas: {status.ok}. Falhadas: {status.fail}.</div>
+          {status.errors?.length ? (
+            <details>
+              <summary>Erros</summary>
+              <ul>{status.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>
+            </details>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function App() {
@@ -51,7 +181,6 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    // Atualiza os artigos agregados quando datas, faturas ou sortBy mudam
     if (faturas.length) {
       fetchArtigosAgregados(faturas);
     }
@@ -85,7 +214,6 @@ export default function App() {
       return;
     }
 
-    // Filtra faturas por intervalo de datas
     const faturasFiltradas = faturasList.filter((f) => {
       if (dataInicio && new Date(f.invoice_date) < new Date(dataInicio)) return false;
       if (dataFim && new Date(f.invoice_date) > new Date(dataFim)) return false;
@@ -108,14 +236,13 @@ export default function App() {
       const agrupados = {};
       itens.forEach(({ id, nome, quantidade, preco }) => {
         if (!Number.isInteger(quantidade)) return;
-
         const nomeNormalizado = normalizarNome(nome);
         if (!agrupados[nomeNormalizado]) {
           agrupados[nomeNormalizado] = { nome: nomeNormalizado, quantidade: 0, valor: 0, ids: [] };
         }
         agrupados[nomeNormalizado].quantidade += quantidade;
         agrupados[nomeNormalizado].valor += preco;
-        agrupados[nomeNormalizado].ids.push(id); // guardar ids para edição
+        agrupados[nomeNormalizado].ids.push(id);
       });
 
       let result = Object.values(agrupados);
@@ -137,11 +264,7 @@ export default function App() {
 
   async function openInvoice(id) {
     try {
-      const { data: invoice, error } = await supabase
-        .from('invoices')
-        .select('*')
-        .eq('id', id)
-        .single();
+      const { data: invoice, error } = await supabase.from('invoices').select('*').eq('id', id).single();
       if (error) throw error;
 
       const { data: items, error: itemsError } = await supabase
@@ -171,10 +294,7 @@ export default function App() {
 
   async function saveItemChanges(itemId, quantidade, preco) {
     try {
-      const { error } = await supabase
-        .from('invoice_items')
-        .update({ quantidade, preco })
-        .eq('id', itemId);
+      const { error } = await supabase.from('invoice_items').update({ quantidade, preco }).eq('id', itemId);
       if (error) throw error;
       openInvoice(selectedInvoice.id);
       fetchFaturas();
@@ -262,8 +382,7 @@ export default function App() {
   function exportToCSV() {
     const headers = ['Artigo', 'Qtd Total', 'Valor Total (€)'];
     const rows = artigosAgregados.map((a) => [a.nome, a.quantidade, a.valor.toFixed(2)]);
-    const csvContent =
-      [headers, ...rows].map((row) => row.map((r) => `"${r}"`).join(',')).join('\n');
+    const csvContent = [headers, ...rows].map((row) => row.map((r) => `"${r}"`).join(',')).join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -281,14 +400,8 @@ export default function App() {
 
     setError('');
     try {
-      // Para simplificar, atualizamos todos os invoice_items que têm o nome antigo para o novo
-      const { error } = await supabase
-        .from('invoice_items')
-        .update({ nome: novoNome })
-        .ilike('nome', oldNome);
+      const { error } = await supabase.from('invoice_items').update({ nome: novoNome }).ilike('nome', oldNome);
       if (error) throw error;
-
-      // Depois refetch dos faturas para atualizar
       fetchFaturas();
     } catch (err) {
       console.error('❌ Erro ao atualizar nome do artigo agregado:', err);
@@ -296,9 +409,7 @@ export default function App() {
     }
   }
 
-  const artigosFiltrados = artigosAgregados.filter((a) =>
-    a.nome.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const artigosFiltrados = artigosAgregados.filter((a) => a.nome.toLowerCase().includes(searchTerm.toLowerCase()));
 
   if (!user) {
     return (
@@ -327,34 +438,23 @@ export default function App() {
       <h1>Faturas do utilizador: {user.email}</h1>
       <button onClick={() => supabase.auth.signOut()}>Logout</button>
 
-      <h2>Carregar novas faturas</h2>
-      <input
-        type="file"
-        accept="application/pdf"
-        multiple
-        onChange={handleFileUpload}
-        disabled={uploadLoading}
-      />
+      <h2>Carregar novas faturas (PDF)</h2>
+      <input type="file" accept="application/pdf" multiple onChange={handleFileUpload} disabled={uploadLoading} />
       {uploadLoading && <p>A carregar faturas...</p>}
       {error && <p style={{ color: 'red' }}>{error}</p>}
+
+      <h2>Importar por CSV</h2>
+      <CSVImport user={user} onDone={fetchFaturas} />
 
       <h2>Filtro por datas das faturas</h2>
       <div style={{ marginBottom: 15 }}>
         <label>
           Data Início:{' '}
-          <input
-            type="date"
-            value={dataInicio}
-            onChange={(e) => setDataInicio(e.target.value)}
-          />
+          <input type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} />
         </label>
         <label style={{ marginLeft: 20 }}>
           Data Fim:{' '}
-          <input
-            type="date"
-            value={dataFim}
-            onChange={(e) => setDataFim(e.target.value)}
-          />
+          <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} />
         </label>
         <button
           style={{ marginLeft: 20 }}
@@ -444,12 +544,7 @@ export default function App() {
             </thead>
             <tbody>
               {selectedInvoice.items.map((item) => (
-                <EditableItemRow
-                  key={item.id}
-                  item={item}
-                  onSave={saveItemChanges}
-                  onDelete={deleteItem}
-                />
+                <EditableItemRow key={item.id} item={item} onSave={saveItemChanges} onDelete={deleteItem} />
               ))}
             </tbody>
           </table>
@@ -469,12 +564,7 @@ function EditableAgregadoRow({ artigo, onSaveNome }) {
       <td style={{ border: '1px solid #ccc', padding: 8 }}>
         {editMode ? (
           <>
-            <input
-              type="text"
-              value={nomeEdit}
-              onChange={(e) => setNomeEdit(e.target.value)}
-              style={{ width: '100%' }}
-            />
+            <input type="text" value={nomeEdit} onChange={(e) => setNomeEdit(e.target.value)} style={{ width: '100%' }} />
             <div style={{ marginTop: 4 }}>
               <button
                 onClick={() => {
@@ -485,10 +575,13 @@ function EditableAgregadoRow({ artigo, onSaveNome }) {
               >
                 Guardar
               </button>
-              <button onClick={() => {
-                setNomeEdit(artigo.nome);
-                setEditMode(false);
-              }} style={{ marginLeft: 8 }}>
+              <button
+                onClick={() => {
+                  setNomeEdit(artigo.nome);
+                  setEditMode(false);
+                }}
+                style={{ marginLeft: 8 }}
+              >
                 Cancelar
               </button>
             </div>
@@ -496,11 +589,7 @@ function EditableAgregadoRow({ artigo, onSaveNome }) {
         ) : (
           <>
             {artigo.nome}
-            <button
-              style={{ marginLeft: 8 }}
-              onClick={() => setEditMode(true)}
-              title="Editar nome"
-            >
+            <button style={{ marginLeft: 8 }} onClick={() => setEditMode(true)} title="Editar nome">
               ✎
             </button>
           </>
@@ -523,12 +612,7 @@ function EditableItemRow({ item, onSave, onDelete }) {
       <td style={{ border: '1px solid #ccc', padding: 8 }}>{item.nome}</td>
       <td style={{ border: '1px solid #ccc', padding: 8, textAlign: 'center' }}>
         {editMode ? (
-          <input
-            type="number"
-            value={quantidade}
-            onChange={(e) => setQuantidade(parseInt(e.target.value))}
-            style={{ width: 60 }}
-          />
+          <input type="number" value={quantidade} onChange={(e) => setQuantidade(parseInt(e.target.value))} style={{ width: 60 }} />
         ) : (
           quantidade
         )}
